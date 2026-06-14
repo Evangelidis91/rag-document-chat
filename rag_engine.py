@@ -41,6 +41,22 @@ Settings.node_parser = SentenceSplitter(chunk_size=600, chunk_overlap=80)
 print("⚙️  Chunking: size=600, overlap=80")
 print("=" * 60)
 
+
+# ======================================================================
+#  SYSTEM PROMPT
+# ======================================================================
+SYSTEM_PROMPT = (
+"You are a helpful assistant that answers questions ONLY using the "
+"provided context from the user's documents.\n"
+"Rules:\n"
+"1. If the answer IS in the context, answer clearly and concisely.\n"
+"2. If the answer is NOT in the context, reply EXACTLY with: "
+"\"I couldn't find the answer to that in the provided documents.\"\n"
+"3. Never use outside knowledge or invent information.\n"
+"4. If a question is unrelated to the documents, politely say it is "
+"outside the scope of the loaded documents."
+)
+
 # ======================================================================
 #  HELPERS
 # ======================================================================
@@ -283,7 +299,7 @@ def load_index():
 
 def get_chat_engine(index):
     """Build a basic chat engine (vector search only) with conversational
-    memory.
+    memory and a system prompt that enforces document-grounded answers.
 
     :param index: The VectorStoreIndex created/loaded earlier.
     :return: A chat engine exposing a .chat(message) method.
@@ -292,6 +308,7 @@ def get_chat_engine(index):
     chat_engine = index.as_chat_engine(
         chat_mode="condense_plus_context",
         similarity_top_k=3,
+        system_prompt=SYSTEM_PROMPT,
         verbose=False,
     )
     return chat_engine
@@ -374,6 +391,7 @@ def get_hybrid_chat_engine(
     chat_engine = CondensePlusContextChatEngine.from_defaults(
         retriever=hybrid_retriever,
         node_postprocessors=[reranker],
+        system_prompt=SYSTEM_PROMPT,
         verbose=False,
     )
     print("✅ [Engine] Hybrid chat engine ready!")

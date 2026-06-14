@@ -1,0 +1,30 @@
+# Secrets - ΠΟΤΕ στο git!
+.env
+
+# Virtual environment
+.venv/
+venv/
+
+# Vector database (βαρύ, αναπαράγεται)
+chroma_db/
+
+# Uploaded documents (βαριά, προσωπικά)
+data/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# PyCharm
+.idea/
+
+# OS
+.DS_Store
+
+# Personal / working notes (not for public repo)
+AGENTS.md
+README_el.md
+README_junior.md
+gr_tech_stack.md
+test.py

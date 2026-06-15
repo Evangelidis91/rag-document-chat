@@ -1,22 +1,10 @@
 import os
 import streamlit as st
-from rag_engine import get_chat_engine, process_files, load_index, classify_files, get_hybrid_chat_engine
-
-
-def build_engine(index):
-    """
-    Create the right chat engine based on the user's settings:
-    advanced (hybrid + rerank) or basic(vector only)
-    :param index: The loaded VectorStoreIndex
-    :return: A chat engine, or None if no index is loaded
-    """
-    if st.session_state.get("use_hybrid", True):
-        return get_hybrid_chat_engine(
-            index=index,
-            top_k_retrieve=st.session_state.get("top_k", 10),
-            top_n_rerank=st.session_state.get("top_n", 3),
-        )
-    return get_chat_engine(index=index)
+from rag_engine import (
+    classify_files, process_files, load_index,
+    get_chat_engine, get_hybrid_chat_engine,   # <- πρόσθεσε αυτό
+    list_indexed_files, route_question_to_files,
+)
 
 
 def save_uploaded_files(uploaded_files, target_folder: str = "data"):
@@ -28,16 +16,52 @@ def save_uploaded_files(uploaded_files, target_folder: str = "data"):
     """
     for file in uploaded_files:
         file_path = os.path.join(target_folder, file.name)
-        # Write the file in binary mode (works for PDF/DOCX)
         with open(file_path, "wb") as f:
             f.write(file.getbuffer())
 
+
+def get_engine_for_files(target_files):
+    """Return a chat engine (basic or hybrid) restricted to the given files.
+
+    Cached; rebuilds only when the filter OR the mode changes.
+
+    :param target_files: List of file names (or None for 'all').
+    :return: A chat engine, or None if no index.
+    """
+    if "index" not in st.session_state:
+        return None
+
+    use_hybrid = st.session_state.get("use_hybrid", True)
+    # Signature now includes the mode, so switching mode rebuilds too
+    signature = (
+        use_hybrid,
+        tuple(sorted(target_files)) if target_files else None,
+    )
+
+    if (
+        st.session_state.get("engine_sig") != signature
+        or "chat_engine" not in st.session_state
+    ):
+        if use_hybrid:
+            engine = get_hybrid_chat_engine(
+                st.session_state.index, file_names=target_files
+            )
+        else:
+            engine = get_chat_engine(
+                st.session_state.index, file_names=target_files
+            )
+        st.session_state.chat_engine = engine
+        st.session_state.engine_sig = signature
+
+    return st.session_state.chat_engine
+
 @st.dialog("Filename conflict")
 def conflict_dialog(conflicts):
-    """
-    Modal asking the user what to do for each file that has the same name as
+    """Modal asking the user what to do for each file that has the same name as
+
     an existing document but different content.
-    :param conflicts: List of conflict file names.
+
+    :param conflicts: List of conflicting file names.
     :return: None
     """
     st.write(
@@ -66,20 +90,19 @@ def conflict_dialog(conflicts):
         st.rerun()
 
 
-# ===== MODULE LEVEL: everything below runs when Streamlit loads the file =====
+# ===== MODULE LEVEL: runs every time Streamlit loads the file =====
 
 # Page configuration
 st.set_page_config(page_title="Chat with your documents", page_icon="📄")
 st.title("Chat with your documents")
-st.caption("RAG with LlamaIndex + Chroma")
+st.caption("Local RAG with LlamaIndex + Chroma + Ollama")
 
 # Create the 'data' folder if it does not exist
 os.makedirs("data", exist_ok=True)
 
-# Initialise the chat history once (a list of {role, content} dicts)
+# Initialise the chat history once
 if "messages" not in st.session_state:
     st.session_state.messages = []
-
 
 # ---------------------------------------------------------------
 #  SIDEBAR
@@ -96,22 +119,46 @@ with st.sidebar:
         with st.spinner("Loading saved index..."):
             index = load_index()
         if index is not None:
-            st.session_state.chat_engine = build_engine(index)
+            # Store the INDEX (we build engines per-filter on demand)
+            st.session_state.index = index
             st.session_state.messages = []
+            # Reset cached engine so it rebuilds with current settings
+            st.session_state.pop("chat_engine", None)
+            st.session_state.pop("engine_sig", None)
             st.success("Loaded! You can start chatting.")
         else:
             st.warning(
                 "No saved index found. Upload files and build one first."
             )
 
+
+
     st.divider()
-    st.subheader("Retrieval mode")
-    use_hybrid = st.toggle("Advanced (hybrid + rerank)", value=True)
-    top_k = st.slider("Candidates to retrieve", 5, 20, 10)
-    top_n = st.slider("Chunks after rerank", 1, 8, 3)
+    st.subheader("🔧 Retrieval mode")
+    use_hybrid = st.toggle("🚀 Hybrid + rerank", value=True)
     st.session_state.use_hybrid = use_hybrid
-    st.session_state.top_k = top_k
-    st.session_state.top_n = top_n
+
+    st.divider()
+
+    # --- Search mode (the boolean toggle!) ---
+    st.subheader("🧭 Document selection")
+    auto_routing = st.toggle("Automatic routing", value=True)
+    st.session_state.auto_routing = auto_routing
+
+    # CONDITIONAL: checkboxes only in manual mode
+    if auto_routing:
+        st.caption("🤖 The AI picks relevant documents per question.")
+        st.session_state.manual_files = None
+    else:
+        st.caption("👆 Choose which documents to search:")
+        if "index" in st.session_state:
+            available = list_indexed_files()
+            selected = []
+            for fname in available:
+                label = fname if len(fname) < 40 else fname[:37] + "..."
+                if st.checkbox(label, value=True, key=f"src_{fname}"):
+                    selected.append(fname)
+            st.session_state.manual_files = selected or None
 
     st.divider()
 
@@ -133,10 +180,8 @@ with st.sidebar:
             st.session_state.file_hashes = file_hashes
 
             if classification["conflicts"]:
-                # Ask the user first via the modal
                 st.session_state.show_conflict_dialog = True
             else:
-                # Nothing to ask -> go straight to processing
                 st.session_state.conflict_decisions = {}
                 st.session_state.process_now = True
             st.rerun()
@@ -152,7 +197,7 @@ with st.sidebar:
             st.session_state.chat_engine.reset()
 
 # ---------------------------------------------------------------
-#  CONFLICT DIALOG + PROCESSING (between sidebar and chat)
+#  CONFLICT DIALOG + PROCESSING
 # ---------------------------------------------------------------
 
 # Open the conflict dialog if there are conflicts to resolve
@@ -170,11 +215,12 @@ if st.session_state.get("process_now"):
             st.session_state.file_hashes,
             st.session_state.get("conflict_decisions", {}),
         )
-        index = load_index()
-        st.session_state.chat_engine = build_engine(index)
+        # Reload the index and reset cached engine
+        st.session_state.index = load_index()
         st.session_state.messages = []
+        st.session_state.pop("chat_engine", None)
+        st.session_state.pop("engine_sig", None)
 
-    # Tell the user exactly what happened
     if report["added"]:
         st.success(f"✅ Added: {', '.join(report['added'])}")
     if report["replaced"]:
@@ -195,13 +241,25 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.write(message["content"])
 
-# 2) The chat input box (sticks to the bottom, like ChatGPT)
+# 2) The chat input box
 if prompt := st.chat_input("Ask something about your documents..."):
 
-    # Guard: make sure an index has been built/loaded first
-    if "chat_engine" not in st.session_state:
+    if "index" not in st.session_state:
         st.error("Build or load an index from the sidebar first")
     else:
+        # --- Decide which files to search ---
+        if st.session_state.get("auto_routing"):
+            # AUTO: the LLM router picks the relevant files
+            all_files = list_indexed_files()
+            with st.spinner("🧭 Routing question to relevant documents..."):
+                target_files = route_question_to_files(prompt, all_files)
+        else:
+            # MANUAL: use the user's checkbox selection
+            target_files = st.session_state.get("manual_files")
+
+        # --- Get the right engine (cached unless the filter changed) ---
+        engine = get_engine_for_files(target_files)
+
         # Show + store the user's message
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
@@ -209,8 +267,14 @@ if prompt := st.chat_input("Ask something about your documents..."):
 
         # Generate + show the assistant's answer
         with st.chat_message("assistant"):
+            # Tell the user which documents are being searched
+            if target_files:
+                st.caption(f"🔍 Searching in: {', '.join(target_files)}")
+            else:
+                st.caption("🔍 Searching in: all documents")
+
             with st.spinner("Searching the documents..."):
-                response = st.session_state.chat_engine.chat(prompt)
+                response = engine.chat(prompt)
                 answer = str(response)
             st.write(answer)
 

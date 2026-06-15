@@ -19,6 +19,8 @@ reranking, content-based deduplication, and a Ragas evaluation harness.
 context precision, plus an A/B test (basic vs hybrid)
 - 📎 **Source citations** for every answer
 - 🧪 **Unit tests** (pytest) for the deduplication logic
+- 🧭 **Hybrid + routing + filtering** — combine semantic & keyword search
+with automatic or manual document selection
 
 ---
 
@@ -152,3 +154,12 @@ rag-app/
 Ragas is pinned to `0.2.x`. Newer 0.4.x versions have an unresolved async
 deadlock with recent `langchain-core`. Pinning ensures the evaluation
 harness runs reliably.
+
+## Known Limitations & Roadmap
+
+- [x] **PDF hyphenation fix** — joins words split across line breaks
+    (e.g. "macro-\nnutrient") so exact-term search works better.
+- [ ] **Advanced parsing** (LlamaParse/Unstructured) for tables & figures.
+- [ ] **BM25 index caching** — currently rebuilt per query (slow at scale).
+- [ ] **Routing reliability** scales with model size; small local models
+    may occasionally exclude the most relevant document.

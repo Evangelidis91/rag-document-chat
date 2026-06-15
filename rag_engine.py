@@ -1,5 +1,6 @@
 import hashlib
 import os
+import re
 import chromadb
 from dotenv import load_dotenv
 
@@ -12,6 +13,9 @@ from llama_index.core.retrievers import QueryFusionRetriever
 from llama_index.core.schema import TextNode
 from llama_index.retrievers.bm25 import BM25Retriever
 from llama_index.vector_stores.chroma import ChromaVectorStore
+from llama_index.core.vector_stores import (
+    MetadataFilter, MetadataFilters, FilterCondition
+)
 
 from llama_index.embeddings.ollama import OllamaEmbedding
 from llama_index.llms.ollama import Ollama
@@ -153,8 +157,12 @@ def _embed_one_file(path: str, file_name: str, file_hash: str, storage_context):
     docs = SimpleDirectoryReader(input_files=[path]).load_data()
     print(f"📄 [Parse] '{file_name}' -> {len(docs)} document section(s)")
 
-    # Attach metadata to every chunk
     for d in docs:
+        # FIX: PDFs hyphenate words across line breaks (e.g. "macro-\nnutrient").
+        # Join them so BM25 and embeddings recognise the full word.
+        cleaned = d.get_content().replace("-\n", "").replace("- ", "")
+        d.set_content(cleaned)  # write via the proper method
+
         d.metadata["file_name"] = file_name
         d.metadata["file_hash"] = file_hash
 
@@ -166,6 +174,25 @@ def _embed_one_file(path: str, file_name: str, file_hash: str, storage_context):
         documents=docs, storage_context=storage_context
     )
     print(f"✅ [Embed] '{file_name}' stored successfully")
+
+def _build_filter(file_names):
+    """
+    Build a LlamaIndex MetadataFilters object that matches ANY of the
+    given file name. Returns None if no filtering needed.
+    :param file_name: List of file names to restrict the search to.
+    :return: A MetadataFilters object, or None for 'search everything'.
+    """
+
+    if not file_names:
+        return None # No filter -> search all
+
+    filters = MetadataFilters(
+        filters=[
+            MetadataFilter(key="file_name", value=fn) for fn in file_names
+        ],
+        condition=FilterCondition.OR # match ANY of these files
+    )
+    return filters
 
 
 # ======================================================================
@@ -297,29 +324,39 @@ def load_index():
     return index
 
 
-def get_chat_engine(index):
+def get_chat_engine(index, file_names = None):
     """Build a basic chat engine (vector search only) with conversational
     memory and a system prompt that enforces document-grounded answers.
 
     :param index: The VectorStoreIndex created/loaded earlier.
+    :param file_names: Optional list of file names to restrict search to.
     :return: A chat engine exposing a .chat(message) method.
     """
-    print("💬 [Engine] Building BASIC chat engine (vector only, top_k=3)")
+
+    filters = _build_filter(file_names=file_names)
+    if filters:
+        print(f"💬 [Engine] BASIC chat engine — filtered to: {file_names}")
+    else:
+        print(f"💬 [Engine] BASIC chat engine — searching ALL documents")
+
     chat_engine = index.as_chat_engine(
         chat_mode="condense_plus_context",
-        similarity_top_k=3,
+        similarity_top_k=5,
+        filters=filters,
         system_prompt=SYSTEM_PROMPT,
         verbose=False,
     )
     return chat_engine
 
 
-def _load_nodes_from_chroma():
-    """Pull every stored chunk out of Chroma and rebuild as TextNode objects.
-    BM25 needs the text in memory. We reuse Chroma IDs so fusion (RRF) can
-    deduplicate correctly.
+def _load_nodes_from_chroma(file_names=None):
+    """Pull stored chunks out of Chroma and rebuild as TextNode objects.
 
-    :return: A list of TextNode objects, or [] if the collection is empty.
+    Optionally keep only chunks belonging to the given files — this is how we
+    apply filtering to BM25 (which has no native metadata filter).
+
+    :param file_names: Optional list of file names to keep. None = all.
+    :return: A list of TextNode objects, or [] if nothing matches.
     """
     coll = _get_collection()
     if coll.count() == 0:
@@ -330,47 +367,60 @@ def _load_nodes_from_chroma():
     for node_id, text, md in zip(
         data["ids"], data["documents"], data["metadatas"]
     ):
-        nodes.append(TextNode(text=text, metadata=md or {}, id_=node_id))
+        md = md or {}
+        # FILTER for BM25: skip chunks not in the selected files
+        if file_names and md.get("file_name") not in file_names:
+            continue
+        nodes.append(TextNode(text=text, metadata=md, id_=node_id))
 
-    print(
-        f"🔁 [BM25] Reconstructed {len(nodes)} nodes from Chroma "
-        f"(needed for keyword search)"
-    )
+    scope = file_names if file_names else "ALL files"
+    print(f"🔁 [BM25] Reconstructed {len(nodes)} nodes (scope: {scope})")
     return nodes
 
 
 def get_hybrid_chat_engine(
-    index, top_k_retrieve: int = 10, top_n_rerank: int = 3
+    index,
+    file_names=None,
+    top_k_retrieve: int = 10,
+    top_n_rerank: int = 3,
 ):
-    """Build an advanced chat engine: hybrid search (vector + BM25) + reranker.
+    """Build an advanced chat engine: hybrid search (vector + BM25) + reranker,
+
+    optionally restricted to specific files.
+
+    The vector side uses native metadata filters; the BM25 side uses
+    pre-filtered nodes — so BOTH respect the file selection.
 
     :param index: The VectorStoreIndex (loaded from Chroma).
+    :param file_names: Optional list of file names to restrict search to.
     :param top_k_retrieve: How many candidates each retriever pulls.
     :param top_n_rerank: How many chunks survive after reranking.
-    :return: A chat engine, or None if there are no documents indexed yet.
+    :return: A chat engine, or None if no matching documents.
     """
-    print(
-        f"\n🚀 [Engine] Building HYBRID chat engine "
-        f"(retrieve top-{top_k_retrieve}, rerank to top-{top_n_rerank})"
-    )
+    scope = file_names if file_names else "ALL documents"
+    print(f"\n🚀 [Engine] Building HYBRID chat engine (scope: {scope})")
 
-    nodes = _load_nodes_from_chroma()
+    # --- BM25 side: build from FILTERED nodes ---
+    nodes = _load_nodes_from_chroma(file_names=file_names)
     if not nodes:
-        print("⚠️  [Engine] No nodes available — cannot build hybrid engine")
+        print("⚠️  [Engine] No nodes for the selected files")
         return None
 
-    # 1) Dense retriever (semantic / vector search)
-    vector_retriever = index.as_retriever(similarity_top_k=top_k_retrieve)
-    print("   ✓ Vector retriever ready (semantic search)")
-
-    # 2) Sparse retriever (BM25 / keyword search)
     bm25_retriever = BM25Retriever.from_defaults(
         nodes=nodes,
         similarity_top_k=top_k_retrieve,
     )
-    print("   ✓ BM25 retriever ready (keyword search)")
+    print("   ✓ BM25 retriever ready (keyword search, filtered)")
 
-    # 3) Hybrid: fuse both with Reciprocal Rank Fusion
+    # --- Vector side: use NATIVE metadata filters ---
+    filters = _build_filter(file_names)
+    vector_retriever = index.as_retriever(
+        similarity_top_k=top_k_retrieve,
+        filters=filters,  # native filter (or None)
+    )
+    print("   ✓ Vector retriever ready (semantic search, filtered)")
+
+    # --- Fuse with Reciprocal Rank Fusion ---
     hybrid_retriever = QueryFusionRetriever(
         [vector_retriever, bm25_retriever],
         similarity_top_k=top_k_retrieve,
@@ -378,16 +428,16 @@ def get_hybrid_chat_engine(
         mode="reciprocal_rerank",
         use_async=False,
     )
-    print("   ✓ Fusion retriever ready (Reciprocal Rank Fusion)")
+    print("   ✓ Fusion retriever ready (RRF)")
 
-    # 4) Reranker: local cross-encoder
+    # --- Reranker ---
     reranker = SentenceTransformerRerank(
         model="cross-encoder/ms-marco-MiniLM-L-6-v2",
         top_n=top_n_rerank,
     )
     print("   ✓ Cross-encoder reranker ready")
 
-    # 5) Wrap in a chat engine with memory
+    # --- Wrap in chat engine with memory + system prompt ---
     chat_engine = CondensePlusContextChatEngine.from_defaults(
         retriever=hybrid_retriever,
         node_postprocessors=[reranker],
@@ -396,3 +446,75 @@ def get_hybrid_chat_engine(
     )
     print("✅ [Engine] Hybrid chat engine ready!")
     return chat_engine
+
+
+def list_indexed_files():
+    """
+    Return the list of distinct file names currently stored in the index.
+    Used to populate the UI(checkboxes / router options)
+
+    :return: A Sorted list of file names.
+    """
+
+    coll = _get_collection()
+    info = get_indexed_file_info(coll)
+    files = sorted(info.keys())
+    print(f"📚 [Files] Indexed documents: {files}")
+    return files
+
+
+
+def route_question_to_files(question: str, available_files: list):
+    """Ask the LLM which document(s) are most relevant. Inclusive routing.
+
+    :param question: The question to route.
+    :param available_files: A sorted list of file names in the index.
+    :return: A list of file names the LLM finds relevant.
+    """
+    if not available_files:
+        return []
+
+    if len(available_files) == 1:
+        print("🧭 [Router] Only one file — using it directly")
+        return available_files
+
+    file_list = "\n".join(f"{i}. {f}" for i, f in enumerate(available_files))
+
+    prompt = (
+        "You are a document router for a search system.\n"
+        "Given a question and a list of documents, return the numbers of "
+        "ALL documents that COULD plausibly contain the answer.\n"
+        "Be INCLUSIVE: if a document is even somewhat related, include it.\n"
+        "IMPORTANT: respond with ONLY comma-separated numbers and NOTHING "
+        "else. Example: 0,2,3\n\n"
+        f"Documents:\n{file_list}\n\n"
+        f"Question: {question}\n\n"
+        "Numbers:"
+    )
+
+    response = str(Settings.llm.complete(prompt))
+    print(f"🧭 [Router] LLM raw response: {response.strip()}")
+
+    # ROBUST PARSING: extract ALL integers from anywhere in the response,
+    # even if the model added chatty text around them.
+    found_numbers = re.findall(r"\d+", response)
+
+    selected = []
+    for token in found_numbers:
+        idx = int(token)
+        if (
+            0 <= idx < len(available_files)
+            and available_files[idx] not in selected
+        ):
+            selected.append(available_files[idx])
+
+    # Safety net: parsing failed -> use ALL files
+    if not selected:
+        print("🧭 [Router] Could not parse -> using ALL files")
+        return available_files
+
+    print(
+        f"🧭 [Router] Selected {len(selected)}/{len(available_files)}: "
+        f"{selected}"
+    )
+    return selected

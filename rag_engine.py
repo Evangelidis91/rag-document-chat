@@ -65,8 +65,10 @@ SYSTEM_PROMPT = (
 #  HELPERS
 # ======================================================================
 
+
 def _get_collection():
     """Open (or create) the Chroma collection. The name includes the embedding
+
     model, because embeddings from different models have different dimensions
     and are NOT compatible with each other.
 
@@ -101,6 +103,7 @@ def compute_file_hash(file_path: str) -> str:
 
 def get_indexed_file_info(chroma_collection) -> dict:
     """Build a map of {file_name: set_of_hashes} from the metadata stored on
+
     every chunk.
 
     :param chroma_collection: The Chroma collection object.
@@ -174,24 +177,53 @@ def _embed_one_file(path: str, file_name: str, file_hash: str, storage_context):
     )
     print(f"✅ [Embed] '{file_name}' stored successfully")
 
+
 def _build_filter(file_names):
-    """
-    Build a LlamaIndex MetadataFilters object that matches ANY of the
-    given file name. Returns None if no filtering needed.
+    """Build a LlamaIndex MetadataFilters object that matches ANY of the given
+
+    file name. Returns None if no filtering needed.
+
     :param file_name: List of file names to restrict the search to.
     :return: A MetadataFilters object, or None for 'search everything'.
     """
-
     if not file_names:
-        return None # No filter -> search all
+        return None  # No filter -> search all
 
     filters = MetadataFilters(
         filters=[
             MetadataFilter(key="file_name", value=fn) for fn in file_names
         ],
-        condition=FilterCondition.OR # match ANY of these files
+        condition=FilterCondition.OR,  # match ANY of these files
     )
     return filters
+
+
+def get_index_stats():
+    """Collect statistics about the indexed knowledge base for the UI.
+
+    :return: A dict with total docs, total chunks, per-file chunk counts, and
+        the active model names.
+    """
+    coll = _get_collection()
+    total_chunks = coll.count()
+
+    # Count chunks PER file by reading the metadata
+    per_file = {}
+    if total_chunks > 0:
+        data = coll.get(include=["metadatas"])
+        for md in data["metadatas"]:
+            if md and md.get("file_name"):
+                name = md["file_name"]
+                per_file[name] = per_file.get(name, 0) + 1
+
+    stats = {
+        "total_documents": len(per_file),
+        "total_chunks": total_chunks,
+        "per_file": per_file,  # {file_name: chunk_count}
+        "llm_model": OLLAMA_LLM,
+        "embed_model": OLLAMA_EMBED,
+    }
+    return stats
 
 
 # ======================================================================
@@ -251,6 +283,7 @@ def process_files(
     documents_folder, classification, file_hashes, decisions: dict
 ):
     """Apply the actual work based on classification and user decisions.
+
     This is where embeddings happen.
 
     :param documents_folder: The documents folder.
@@ -308,6 +341,7 @@ def process_files(
 #  LOAD  &  CHAT
 # ======================================================================
 
+
 def load_index():
     """Load the existing index from Chroma WITHOUT re-embedding anything.
 
@@ -323,20 +357,20 @@ def load_index():
     return index
 
 
-def get_chat_engine(index, file_names = None):
+def get_chat_engine(index, file_names=None):
     """Build a basic chat engine (vector search only) with conversational
+
     memory and a system prompt that enforces document-grounded answers.
 
     :param index: The VectorStoreIndex created/loaded earlier.
     :param file_names: Optional list of file names to restrict search to.
     :return: A chat engine exposing a .chat(message) method.
     """
-
     filters = _build_filter(file_names=file_names)
     if filters:
         print(f"💬 [Engine] BASIC chat engine — filtered to: {file_names}")
     else:
-        print(f"💬 [Engine] BASIC chat engine — searching ALL documents")
+        print("💬 [Engine] BASIC chat engine — searching ALL documents")
 
     chat_engine = index.as_chat_engine(
         chat_mode="condense_plus_context",
@@ -448,19 +482,17 @@ def get_hybrid_chat_engine(
 
 
 def list_indexed_files():
-    """
-    Return the list of distinct file names currently stored in the index.
-    Used to populate the UI(checkboxes / router options)
+    """Return the list of distinct file names currently stored in the index.
+
+    Used to populate the UI (checkboxes / router options)
 
     :return: A Sorted list of file names.
     """
-
     coll = _get_collection()
     info = get_indexed_file_info(coll)
     files = sorted(info.keys())
     print(f"📚 [Files] Indexed documents: {files}")
     return files
-
 
 
 def route_question_to_files(question: str, available_files: list):

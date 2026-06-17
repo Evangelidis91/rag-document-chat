@@ -265,31 +265,32 @@ if prompt := st.chat_input("Ask something about your documents..."):
         with st.chat_message("user"):
             st.write(prompt)
 
-        # Generate + show the assistant's answer
-        with st.chat_message("assistant"):
-            # Tell the user which documents are being searched
-            if target_files:
-                st.caption(f"🔍 Searching in: {', '.join(target_files)}")
-            else:
-                st.caption("🔍 Searching in: all documents")
+            # Generate + show the assistant's answer
+            with st.chat_message("assistant"):
+                # Tell the user which documents are being searched
+                if target_files:
+                    st.caption(f"🔍 Searching in: {', '.join(target_files)}")
+                else:
+                    st.caption("🔍 Searching in: all documents")
 
-            with st.spinner("Searching the documents..."):
-                response = engine.chat(prompt)
-                answer = str(response)
-            st.write(answer)
+                # Start the streaming response
+                with st.spinner("Searching the documents..."):
+                    response = engine.stream_chat(prompt)
+                answer = st.write_stream(response.response_gen)
 
-            # Show the sources used for this answer
-            if response.source_nodes:
-                with st.expander("Sources"):
-                    for i, node in enumerate(response.source_nodes, 1):
-                        file_name = node.metadata.get("file_name", "unknown")
-                        score = node.score if node.score is not None else 0.0
-                        st.markdown(
-                            f"**Source {i}** — 📄 {file_name} (score: {score:.2f})"
-                        )
-                        st.caption(node.text[:300] + "...")
+                if response.source_nodes:
+                    with st.expander("Sources"):
+                        for i, node in enumerate(response.source_nodes, 1):
+                            file_name = node.metadata.get("file_name", "unknown")
+                            page = node.metadata.get("page_label", "—")
+                            score = node.score if node.score is not None else 0.0
+                            st.markdown(
+                                f"**Source {i}** — 📄 {file_name} "
+                                f"(page {page}, score: {score:.2f})"
+                            )
+                            st.caption(node.text[:300] + "...")
 
-        # Store the assistant's message in the history
-        st.session_state.messages.append(
-            {"role": "assistant", "content": answer}
-        )
+            # Store the assistant's message in the history
+            st.session_state.messages.append(
+                {"role": "assistant", "content": answer}
+            )

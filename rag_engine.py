@@ -158,7 +158,6 @@ def _embed_one_file(path: str, file_name: str, file_hash: str, storage_context):
     print(f"📄 [Parse] '{file_name}' -> {len(docs)} document section(s)")
 
     for d in docs:
-        # FIX: PDFs hyphenate words across line breaks (e.g. "macro-\nnutrient").
         # Join them so BM25 and embeddings recognise the full word.
         cleaned = d.get_content().replace("-\n", "").replace("- ", "")
         d.set_content(cleaned)  # write via the proper method

@@ -1,10 +1,46 @@
 import os
+import re
+
 import streamlit as st
 from rag_engine import (
     classify_files, process_files, load_index,
-    get_chat_engine, get_hybrid_chat_engine,   # <- πρόσθεσε αυτό
+    get_chat_engine, get_hybrid_chat_engine,
     list_indexed_files, route_question_to_files,
 )
+
+# Common words to ignore when highlighting (they'd match everywhere)
+_STOPWORDS = {
+    "what", "is", "are", "the", "a", "an", "of", "to", "in", "on", "and",
+    "or", "for", "how", "why", "when", "who", "which", "that", "this",
+    "with", "do", "does", "can", "explain", "tell", "me", "about", "?",
+}
+
+def highlight_text(text:str, query:str, max_len:int = 400) -> str:
+    """
+    Highlight the query's keywords inside a chunk: bold + underlined.
+    :param text: The chuck text from a source node.
+    :param query: The user's query.
+    :param max_len: Max chars to show
+    :return: A markdown string with keyword wrapped in bold.
+    """
+
+    # Trim long chunks for readability
+    snippet = text[:max_len].strip()
+    if len(snippet) > max_len:
+        snippet += "..."
+
+    # Extract meaningful keywords from the query
+    keywords = [
+        w for w in re.findall(r"\w+", query.lower())
+        if w not in _STOPWORDS and len(w) > 2
+    ]
+
+    # Bold each keyword wherever it appears
+    for kw in keywords:
+        pattern = re.compile(rf"\b({re.escape(kw)})\b", re.IGNORECASE)
+        snippet = pattern.sub(r"__\1__", snippet)
+
+    return snippet
 
 
 def save_uploaded_files(uploaded_files, target_folder: str = "data"):
@@ -58,7 +94,6 @@ def get_engine_for_files(target_files):
 @st.dialog("Filename conflict")
 def conflict_dialog(conflicts):
     """Modal asking the user what to do for each file that has the same name as
-
     an existing document but different content.
 
     :param conflicts: List of conflicting file names.
@@ -284,11 +319,19 @@ if prompt := st.chat_input("Ask something about your documents..."):
                             file_name = node.metadata.get("file_name", "unknown")
                             page = node.metadata.get("page_label", "—")
                             score = node.score if node.score is not None else 0.0
+
+                            # Convert score to percentage
+                            relevance = max(0, min(100, int((score + 5) * 20)))
+
+                            # Header line for this source
                             st.markdown(
-                                f"**Source {i}** — 📄 {file_name} "
-                                f"(page {page}, score: {score:.2f})"
+                                f"**{i}.** 📄 `{file_name}` · page {page} · relevance ~{relevance}%"
                             )
-                            st.caption(node.text[:300] + "...")
+
+                            # The chunk text WITH highlighted query keywords
+                            highlighted = highlight_text(node.text, prompt)
+                            st.markdown(f"> {highlighted}")
+                            st.divider()
 
             # Store the assistant's message in the history
             st.session_state.messages.append(

@@ -26,6 +26,8 @@ from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.embeddings.ollama import OllamaEmbedding
 from llama_index.llms.ollama import Ollama
 
+from llama_index.core.node_parser import SemanticSplitterNodeParser
+
 load_dotenv()
 
 # ======================================================================
@@ -62,6 +64,26 @@ print("=" * 60)
 
 
 # ======================================================================
+#  CHUNKING STRATEGY SWITCH
+#  Default: sentence (fixed-size). Set CHUNKING=semantic for benchmarks.
+# ======================================================================
+CHUNKING = os.getenv("CHUNKING", "sentence").lower()
+
+if CHUNKING == "semantic":
+    # Semantic: splits where meaning shifts (uses embeddings)
+    Settings.node_parser = SemanticSplitterNodeParser(
+        buffer_size=1,
+        breakpoint_percentile_threshold=95,
+        embed_model=Settings.embed_model,
+    )
+    print(f"✂️  Chunking: SEMANTIC (breakpoint=95%)")
+else:
+    # Sentence: fixed-size (default)
+    Settings.node_parser = SentenceSplitter(chunk_size=600, chunk_overlap=80)
+    print(f"✂️  Chunking: SENTENCE (size=600, overlap=80)")
+
+
+# ======================================================================
 #  SYSTEM PROMPT
 # ======================================================================
 SYSTEM_PROMPT = (
@@ -84,16 +106,16 @@ SYSTEM_PROMPT = (
 
 
 def _get_collection():
-    """Open (or create) the Chroma collection. The name includes the embedding
-
-    model, because embeddings from different models have different dimensions
-    and are NOT compatible with each other.
+    """
+    Open (or create) the Chroma collection. The name includes both the
+    embedding model AND the chunking strategy, since each combination
+    produces a different set of chunks.
 
     :return: The Chroma collection object.
     """
     db = chromadb.PersistentClient(path="./chroma_db")
-    safe_name = EMBED_NAME.replace("-", "_").replace(":", "_")
-    collection_name = f"collection_{safe_name}"
+    safe_embed = EMBED_NAME.replace("-", "_").replace(":", "_")
+    collection_name = f"collection_{safe_embed}_{CHUNKING}"
     collection = db.get_or_create_collection(collection_name)
     print(f"📦 [Chroma] Using collection '{collection_name}' "
           f"({collection.count()} chunks currently stored)")

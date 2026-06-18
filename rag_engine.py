@@ -17,30 +17,42 @@ from llama_index.core.vector_stores import (
     MetadataFilter, MetadataFilters, FilterCondition
 )
 
+from llama_index.llms.openai import OpenAI
+from llama_index.embeddings.openai import OpenAIEmbedding
+
 from llama_index.embeddings.ollama import OllamaEmbedding
 from llama_index.llms.ollama import Ollama
 
 load_dotenv()
 
 # ======================================================================
-#  CONFIGURATION (Ollama only — local & free)
+#  PROVIDER SWITCH
+#  Default: Ollama (local, free) for the app/demo.
+#  Set LLM_PROVIDER=openai for benchmarks (stable, fast, consistent).
 # ======================================================================
-# Models are configurable via env vars, with sensible defaults.
+PROVIDER = os.getenv("LLM_PROVIDER", "ollama").lower()
+
 OLLAMA_LLM = os.getenv("OLLAMA_MODEL", "llama3.2")
 OLLAMA_EMBED = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
 
 print("=" * 60)
-print("⚙️  INITIALISING RAG ENGINE (Ollama / local)")
-print(f"🦙 LLM model:        {OLLAMA_LLM}")
-print(f"🔢 Embedding model:  {OLLAMA_EMBED}")
+print(f"⚙️  INITIALISING RAG ENGINE — provider: {PROVIDER.upper()}")
 
-# The model that generates answers (runs locally via Ollama)
-Settings.llm = Ollama(model=OLLAMA_LLM, request_timeout=120.0)
+if PROVIDER == "openai":
+    # Cloud — stable & fast, used for benchmarking
+    LLM_NAME = "gpt-4o-mini"
+    EMBED_NAME = "text-embedding-3-small"
+    Settings.llm = OpenAI(model=LLM_NAME, temperature=0.1)
+    Settings.embed_model = OpenAIEmbedding(model=EMBED_NAME)
+    print(f"☁️  LLM: {LLM_NAME}  |  Embeddings: {EMBED_NAME}")
+else:
+    # Local — free & private, used for the demo
+    LLM_NAME = OLLAMA_LLM
+    EMBED_NAME = OLLAMA_EMBED
+    Settings.llm = Ollama(model=OLLAMA_LLM, request_timeout=120.0)
+    Settings.embed_model = OllamaEmbedding(model_name=OLLAMA_EMBED)
+    print(f"🦙 LLM: {LLM_NAME}  |  Embeddings: {EMBED_NAME}")
 
-# The model that creates embeddings (runs locally via Ollama)
-Settings.embed_model = OllamaEmbedding(model_name=OLLAMA_EMBED)
-
-# How the text is split into chunks
 Settings.node_parser = SentenceSplitter(chunk_size=600, chunk_overlap=80)
 print("⚙️  Chunking: size=600, overlap=80")
 print("=" * 60)
@@ -50,15 +62,17 @@ print("=" * 60)
 #  SYSTEM PROMPT
 # ======================================================================
 SYSTEM_PROMPT = (
-"You are a helpful assistant that answers questions ONLY using the "
-"provided context from the user's documents.\n"
-"Rules:\n"
-"1. If the answer IS in the context, answer clearly and concisely.\n"
-"2. If the answer is NOT in the context, reply EXACTLY with: "
-"\"I couldn't find the answer to that in the provided documents.\"\n"
-"3. Never use outside knowledge or invent information.\n"
-"4. If a question is unrelated to the documents, politely say it is "
-"outside the scope of the loaded documents."
+    "You are a helpful assistant that answers questions ONLY using the "
+    "provided context from the user's documents.\n"
+    "Rules:\n"
+    "1. If the answer IS in the context, answer clearly and concisely.\n"
+    "2. If the answer is NOT in the context, reply EXACTLY with: "
+    "\"I couldn't find the answer to that in the provided documents.\"\n"
+    "3. Never use outside knowledge or invent information.\n"
+    "4. If a question is unrelated to the documents, politely say it is "
+    "outside the scope of the loaded documents.\n"
+    "5. Write math and formulas in plain text (e.g. 'f(x)', 'R^n'), "
+    "NOT in LaTeX notation. Avoid backslash commands like \\mathbb."
 )
 
 # ======================================================================
@@ -75,14 +89,11 @@ def _get_collection():
     :return: The Chroma collection object.
     """
     db = chromadb.PersistentClient(path="./chroma_db")
-    # Embedding-model-specific name avoids dimension mismatch if you ever switch embedding models.
-    safe_name = OLLAMA_EMBED.replace("-", "_").replace(":", "_")
+    safe_name = EMBED_NAME.replace("-", "_").replace(":", "_")
     collection_name = f"collection_{safe_name}"
     collection = db.get_or_create_collection(collection_name)
-    print(
-        f"📦 [Chroma] Using collection '{collection_name}' "
-        f"({collection.count()} chunks currently stored)"
-    )
+    print(f"📦 [Chroma] Using collection '{collection_name}' "
+          f"({collection.count()} chunks currently stored)")
     return collection
 
 
@@ -219,9 +230,9 @@ def get_index_stats():
     stats = {
         "total_documents": len(per_file),
         "total_chunks": total_chunks,
-        "per_file": per_file,  # {file_name: chunk_count}
-        "llm_model": OLLAMA_LLM,
-        "embed_model": OLLAMA_EMBED,
+        "per_file": per_file,
+        "llm_model": LLM_NAME,
+        "embed_model": EMBED_NAME,
     }
     return stats
 

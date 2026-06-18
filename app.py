@@ -255,8 +255,8 @@ with st.sidebar:
     # --- Upload new files ---
     st.subheader("Add / update documents")
     uploaded_files = st.file_uploader(
-        label="Choose PDF or Word files",
-        type=["pdf", "docx", "txt"],
+        label="Choose PDF, Word, text or EPUB files",
+        type=["pdf", "docx", "txt", "epub"],
         accept_multiple_files=True,
     )
 

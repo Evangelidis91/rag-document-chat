@@ -253,3 +253,9 @@ ML content at wrong boundaries. Fixed-size chunking proved more robust.
 > **5. Honest negative results are valuable.** Showing that a technique
 > *didn't* help (with a clear explanation of why) demonstrates deeper
 > understanding than claiming everything works.
+
+
+
+«CRAG (Corrective RAG) BACKFIRED on a clean corpus: −0.13 faithfulness. The grader incorrectly flagged valid content as 'irrelevant' (e.g. rejecting Hawking's black hole content!), causing the system to refuse answers it actually had. Lesson: a self-correction layer is only as good as its grader. On high-quality retrieval, CRAG adds an unreliable gatekeeper + extra latency for negative value. CRAG helps when retrieval is NOISY — not when it's already good.»
+
+🌟 LinkedIn gold: «CRAG's effectiveness hinges entirely on its grader. A strict grader backfired (−0.13), rejecting valid content (even Hawking's black hole passage!). A lenient grader recovered and even improved faithfulness (+0.06, reaching 1.0) — but at the cost of an extra LLM call per query. On clean retrieval, CRAG's grading step adds latency for marginal gain; its real value is filtering NOISY retrieval. The grader itself can become a failure point.»

@@ -261,6 +261,85 @@ def get_index_stats():
     }
     return stats
 
+def grade_chunks(question: str, nodes) -> str:
+    """
+    CRAG grader: ask the LLM whether the retrieved chunks are relevant.
+
+    :param question: The user's question.
+    :param nodes: The retrieved source nodes.
+    :return: 'relevant', 'irrelevant', or 'ambiguous'.
+    """
+    if not nodes:
+        return "irrelevant"
+
+    # Give the grader MORE context (full chunks, not 300 chars)
+    context = "\n---\n".join(n.text for n in nodes[:3])
+
+    prompt = (
+        "You are a relevance grader. Decide if the CONTEXT contains "
+        "information RELATED to the QUESTION's topic.\n"
+        "Be LENIENT: if the context discusses the same subject, it counts "
+        "as relevant even if it's not a perfect definition.\n"
+        "Reply with ONE word: 'relevant' or 'irrelevant'.\n\n"
+        f"QUESTION: {question}\n\n"
+        f"CONTEXT:\n{context[:2000]}\n\n"
+        "Grade:"
+    )
+
+    response = str(Settings.llm.complete(prompt)).strip().lower()
+    print(f"⚖️  [CRAG] '{question[:30]}' -> {response}")
+
+    # Only mark irrelevant if explicitly so (lenient default)
+    if "irrelevant" in response:
+        return "irrelevant"
+    return "relevant"
+
+def get_crag_query_engine(index, file_names=None, use_hybrid=True,
+                          top_k_retrieve=10, top_n_rerank=3):
+    """
+    Build a CRAG-style query engine: retrieve → grade → act.
+    Returns an object with a .query(question) method that grades the
+    retrieved context before answering.
+
+    :param index: The VectorStoreIndex.
+    :param file_names: Optional file filter.
+    :param use_hybrid: Use hybrid retrieval if True.
+    :param top_k_retrieve: Candidates per retriever.
+    :param top_n_rerank: Chunks after reranking.
+    :return: A CRAGQueryEngine instance.
+    """
+    print(f"\n🔄 [CRAG] Building CRAG query engine (hybrid={use_hybrid})")
+
+    # Reuse the hybrid retriever + reranker (or basic vector)
+    if use_hybrid:
+        nodes = _load_nodes_from_chroma(file_names=file_names)
+        if not nodes:
+            return None
+        bm25 = BM25Retriever.from_defaults(
+            nodes=nodes, similarity_top_k=top_k_retrieve
+        )
+        filters = _build_filter(file_names)
+        vector = index.as_retriever(
+            similarity_top_k=top_k_retrieve, filters=filters
+        )
+        retriever = QueryFusionRetriever(
+            [vector, bm25], similarity_top_k=top_k_retrieve,
+            num_queries=1, mode="reciprocal_rerank", use_async=False,
+        )
+        reranker = SentenceTransformerRerank(
+            model="cross-encoder/ms-marco-MiniLM-L-6-v2",
+            top_n=top_n_rerank,
+        )
+        postprocessors = [reranker]
+    else:
+        filters = _build_filter(file_names)
+        retriever = index.as_retriever(
+            similarity_top_k=top_n_rerank, filters=filters
+        )
+        postprocessors = []
+
+    return CRAGQueryEngine(retriever, postprocessors)
+
 
 # ======================================================================
 #  CLASSIFY  ->  PROCESS
@@ -654,3 +733,60 @@ def route_question_to_files(question: str, available_files: list):
         f"{selected}"
     )
     return selected
+
+
+from llama_index.core import QueryBundle
+
+class CRAGQueryEngine:
+    """
+    A Corrective-RAG query engine: retrieves, grades the context, and
+    only answers if the context is relevant — otherwise returns an
+    honest "not found" response.
+    """
+
+    def __init__(self, retriever, postprocessors):
+        self.retriever = retriever
+        self.postprocessors = postprocessors
+
+    def query(self, question: str):
+        """Retrieve, grade, then answer or refuse."""
+        # 1) Retrieve
+        bundle = QueryBundle(question)
+        nodes = self.retriever.retrieve(bundle)
+
+        # 2) Apply postprocessors (reranker)
+        for pp in self.postprocessors:
+            nodes = pp.postprocess_nodes(nodes, query_bundle=bundle)
+
+        # 3) GRADE the retrieved context (the CRAG step)
+        grade = grade_chunks(question, nodes)
+
+        # 4) Act on the grade
+        if grade == "irrelevant":
+            answer = ("I couldn't find relevant information to answer "
+                      "that in the provided documents.")
+        else:
+            # Build context & answer (relevant or ambiguous)
+            context = "\n---\n".join(n.text for n in nodes)
+            prefix = "" if grade == "relevant" else (
+                "Note: the documents only loosely cover this. "
+            )
+            prompt = (
+                f"{SYSTEM_PROMPT}\n\n"
+                f"Context:\n{context}\n\n"
+                f"Question: {question}\n\nAnswer:"
+            )
+            answer = prefix + str(Settings.llm.complete(prompt))
+
+        # Wrap in a simple response object (Ragas-compatible)
+        return CRAGResponse(answer, nodes)
+
+class CRAGResponse:
+    """Minimal response wrapper compatible with our benchmark scripts."""
+
+    def __init__(self, answer, source_nodes):
+        self._answer = answer
+        self.source_nodes = source_nodes
+
+    def __str__(self):
+        return self._answer

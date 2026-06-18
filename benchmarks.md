@@ -118,6 +118,43 @@ smaller) chunks, reducing context per chunk. Fixed-size chunking is more
 robust for technical/mathematical content.
 
 ---
+## Table 4 — CRAG (Corrective RAG)
+
+CRAG adds a relevance-grading step: before answering, the LLM judges
+whether the retrieved context actually addresses the question, and
+refuses to answer if it doesn't.
+
+| Configuration       | Faith. | Ans.Rel | Ctx.Prec | Latency |
+|---------------------|:------:|:-------:|:--------:|:-------:|
+| Hybrid+Rerank       | 0.941  |  0.939  |  0.903   |  ~3s    |
+| + CRAG (strict)     | 0.833  |  0.778  |  0.667   |  ~6s    |
+| + CRAG (lenient)    | 1.000  |  0.936  |  0.833   |  ~6s    |
+
+### Out-of-scope questions (the real test)
+Two off-topic questions ("capital of Australia?", "chocolate cake
+recipe?") that the documents don't cover:
+
+| Configuration   | Behaviour                                            |
+|-----------------|------------------------------------------------------|
+| Hybrid + Rerank | May attempt an answer from loosely-matched chunks    |
+| + CRAG          | Grader returns **"irrelevant"** → correctly refuses  |
+
+**Finding:** CRAG's value hinges on its grader.
+- A **strict grader backfired** (−0.13 faithfulness): it wrongly flagged
+  valid content as irrelevant (even rejecting Hawking's black-hole
+  passage), refusing answers it actually had.
+- A **lenient grader** recovered and improved in-scope faithfulness to a
+  perfect 1.000 — but added an LLM call per query (~2× latency).
+- On **out-of-scope** queries, CRAG correctly identified irrelevant
+  retrieval and refused to answer — its true strength.
+
+**Takeaway:** The grader is a double-edged sword. On clean, in-scope
+retrieval CRAG adds latency for marginal gain; its real value is
+**rejecting out-of-scope queries** and filtering noisy retrieval.
+```
+`
+
+---
 
 ## 🎯 Key Takeaways
 
@@ -137,6 +174,11 @@ robust for technical/mathematical content.
 
 5. **Honest negative results matter.** Two of three "advanced"
    techniques were net-negative on this corpus — measured, not assumed.
+   
+6. **Self-correction needs a reliable grader.** CRAG's relevance grader
+   can become a failure point — a strict version rejected valid content.
+   Its real value is rejecting out-of-scope queries, not refining clean
+   retrieval.
 
 ---
 
@@ -153,7 +195,7 @@ LLM_PROVIDER=openai python ab_test_hyde.py
 # Chunking comparison (run for each strategy)
 CHUNKING=sentence LLM_PROVIDER=openai python ab_test_chunking.py
 CHUNKING=semantic LLM_PROVIDER=openai python ab_test_chunking.py
-```
+
 
 > Each configuration uses a separate Chroma collection
 > (`collection_<embed_model>_<chunking>`), so results never mix.
@@ -162,9 +204,8 @@ CHUNKING=semantic LLM_PROVIDER=openai python ab_test_chunking.py
 
 ## Pending (Roadmap)
 
-| Technique | Status |
-|-----------|--------|
-| CRAG (Corrective RAG) | ⏳ Not yet measured |
-| Contextual Retrieval | ⏳ Not yet measured |
+| Technique               | Status                  |
+|-------------------------|-------------------------|
+| Contextual Retrieval    | ⏳ Not yet measured      |
 | Observability (Phoenix) | ⏳ Tooling, not a metric |
-```
+

@@ -90,3 +90,8 @@ then hybrid, then scope, we isolated the real cause in the data.
 "not found" instead of hallucinating an answer.
 4. **Query phrasing matters** — the same concept failed as "macronutrients"
 but succeeded as "carbohydrates, proteins, fats".
+
+
+🎓 Το ΤΕΡΑΣΤΙΟ insight (LinkedIn gold!)
+«Hybrid search isn't universally better — its value is domain-dependent. On ML and Physics queries, BM25's exact-term matching improved context precision (+0.06, +0.10). But on Nutrition, it HURT (-0.21): morphologically-similar terms (macro-nutrient, macro-biotic, macro-mineral) caused lexical false-positives that pure semantic search avoided. This shows why per-domain evaluation matters — a single average would have hidden this completely.»
+

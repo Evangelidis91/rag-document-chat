@@ -20,12 +20,15 @@ load_dotenv()
 
 # Each question is tagged with its type: "semantic" or "keyword"
 TEST_QUESTIONS = [
-  ("What is food preservation?", "semantic"),
-  ("Explain the Maillard reaction.", "keyword"),
-  ("What are food additives?", "semantic"),
-  ("What is pasteurization?", "keyword"),
-  ("How is cheese produced?", "semantic"),
-  ("What is the role of enzymes in food processing?", "keyword"),
+    # Machine Learning
+    ("What is gradient descent?", "ml"),
+    ("What is a neural network?", "ml"),
+    # Nutrition
+    ("What are macronutrients?", "nutrition"),
+    ("What is the role of vitamin D in the body?", "nutrition"),
+    # Physics
+    ("What is a black hole?", "physics"),
+    ("What is the theory of relativity?", "physics"),
 ]
 
 

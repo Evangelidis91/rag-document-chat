@@ -17,6 +17,9 @@ from llama_index.core.vector_stores import (
     MetadataFilter, MetadataFilters, FilterCondition
 )
 
+from llama_index.core.indices.query.query_transform import HyDEQueryTransform
+from llama_index.core.query_engine import TransformQueryEngine
+
 from llama_index.llms.openai import OpenAI
 from llama_index.embeddings.openai import OpenAIEmbedding
 
@@ -346,6 +349,75 @@ def process_files(
     print(f"\n⚙️  [Process] Done. Report: {report}")
     print("=" * 60)
     return report
+
+def get_hyde_query_engine(
+    index,
+    file_names=None,
+    use_hybrid=True,
+    top_k_retrieve=10,
+    top_n_rerank=3,
+):
+    """Build a QUERY engine with HyDE (Hypothetical Document Embeddings).
+
+    HyDE first asks the LLM to write a hypothetical answer, then searches with
+    THAT (richer) text instead of the short question.
+
+    Note: this is a query engine (no chat memory) — ideal for benchmarking.
+
+    :param index: The VectorStoreIndex.
+    :param file_names: Optional file filter.
+    :param use_hybrid: If True, use hybrid retrieval under the hood.
+    :param top_k_retrieve: Candidates per retriever.
+    :param top_n_rerank: Chunks after reranking.
+    :return: A query engine with HyDE applied.
+    """
+    print(f"\n🔮 [HyDE] Building HyDE query engine (hybrid={use_hybrid})")
+
+    # Build the underlying retriever (reuse hybrid logic)
+    if use_hybrid:
+        nodes = _load_nodes_from_chroma(file_names=file_names)
+        if not nodes:
+            return None
+        bm25 = BM25Retriever.from_defaults(
+            nodes=nodes, similarity_top_k=top_k_retrieve
+        )
+        filters = _build_filter(file_names)
+        vector = index.as_retriever(
+            similarity_top_k=top_k_retrieve, filters=filters
+        )
+        retriever = QueryFusionRetriever(
+            [vector, bm25],
+            similarity_top_k=top_k_retrieve,
+            num_queries=1,
+            mode="reciprocal_rerank",
+            use_async=False,
+        )
+        reranker = SentenceTransformerRerank(
+            model="cross-encoder/ms-marco-MiniLM-L-6-v2",
+            top_n=top_n_rerank,
+        )
+        postprocessors = [reranker]
+    else:
+        filters = _build_filter(file_names)
+        retriever = index.as_retriever(
+            similarity_top_k=top_n_rerank, filters=filters
+        )
+        postprocessors = []
+
+    # Build a base query engine from the retriever
+    from llama_index.core.query_engine import RetrieverQueryEngine
+
+    base_engine = RetrieverQueryEngine.from_args(
+        retriever=retriever,
+        node_postprocessors=postprocessors,
+    )
+
+    # Wrap it with HyDE
+    hyde = HyDEQueryTransform(include_original=True)
+    hyde_engine = TransformQueryEngine(base_engine, query_transform=hyde)
+
+    print("✅ [HyDE] Query engine ready!")
+    return hyde_engine
 
 
 # ======================================================================

@@ -95,3 +95,13 @@ but succeeded as "carbohydrates, proteins, fats".
 🎓 Το ΤΕΡΑΣΤΙΟ insight (LinkedIn gold!)
 «Hybrid search isn't universally better — its value is domain-dependent. On ML and Physics queries, BM25's exact-term matching improved context precision (+0.06, +0.10). But on Nutrition, it HURT (-0.21): morphologically-similar terms (macro-nutrient, macro-biotic, macro-mineral) caused lexical false-positives that pure semantic search avoided. This shows why per-domain evaluation matters — a single average would have hidden this completely.»
 
+🎓 Το μάθημα που ήδη ανακαλύψαμε (gold!)
+
+    «HyDE improved faithfulness (+0.05) but didn't change context precision when combined with a reranker. Why? The cross-encoder reranker re-scores all candidates regardless of how they were retrieved, converging on the same top chunks whether or not HyDE was applied. HyDE's retrieval benefit is masked by strong reranking — they're partially redundant. This is exactly why ablation studies matter: a technique's value depends on what else is in the pipeline.»
+
+
+🌟 Το LinkedIn story που χτίζεται
+
+    «Ran an ablation study on HyDE. Surprising finding: on vector-only retrieval, HyDE boosted context precision by +0.07 (and +0.22 on technical ML queries!). But when added on top of a reranker, the gain disappeared — HyDE and cross-encoder reranking are partially redundant, both refining retrieval. The lesson: technique value is contextual. Stacking 'best practices' blindly can mean paying extra latency for zero gain.»
+
+    🎯 Αυτό δείχνει βαθιά κατανόηση — ότι οι τεχνικές δεν είναι additive, μπορεί να επικαλύπτονται. Senior-level insight!

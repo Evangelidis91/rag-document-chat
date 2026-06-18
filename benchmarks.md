@@ -36,8 +36,8 @@ distinct, but hurts Nutrition (−0.21), where morphologically-similar
 
 | Configuration         | Faithfulness | Answer Rel. | Context Prec. | Latency |
 |-----------------------|:------------:|:-----------:|:-------------:|:-------:|
-| Baseline (h+rerank)   |      —       |      —      |       —       |    —    |
-| + HyDE                |      —       |      —      |       —       |    —    |
+| Baseline (h+rerank)   |    0.948     |    0.939    |     0.931     |  3.3s   |
+| + HyDE                |    0.969     |    0.942    |     0.931     |  ~4.5s  |
 | + Semantic chunking   |      —       |      —      |       —       |    —    |
 | + CRAG                |      —       |      —      |       —       |    —    |
 
@@ -47,11 +47,21 @@ distinct, but hurts Nutrition (−0.21), where morphologically-similar
 
 | Configuration         | Faithfulness | Answer Rel. | Context Prec. | Latency |
 |-----------------------|:------------:|:-----------:|:-------------:|:-------:|
-| Baseline (h+rerank)   |      —       |      —      |       —       |    —    |
-| Baseline + HyDE only  |      —       |      —      |       —       |    —    |
+| Baseline (h+rerank)   |    0.948     |    0.939    |     0.931     |  3.3s   |
+| Baseline + HyDE only  |    0.969     |    0.942    |     0.931     |  ~4.5s  |
 | Baseline + Semantic   |      —       |      —      |       —       |    —    |
 | Baseline + CRAG only  |      —       |      —      |       —       |    —    |
 | **All combined**      |      —       |      —      |       —       |    —    |
+
+
+## Table 3b — HyDE: with vs without reranker (the redundancy finding)
+
+| Configuration       | Faithfulness | Answer Rel. | Context Prec. |
+|---------------------|:------------:|:-----------:|:-------------:|
+| Vector only         |    0.951     |    0.942    |     0.928     |
+| Vector + HyDE       |    0.983     |    0.952    |   **1.000**   |
+| Hybrid+Rerank       |    0.948     |    0.939    |     0.931     |
+| Hybrid+Rerank+HyDE  |    0.969     |    0.942    |     0.931     |
 
 ---
 

@@ -30,13 +30,7 @@ from llama_index.core.node_parser import SemanticSplitterNodeParser
 
 load_dotenv()
 
-# ======================================================================
-#  PROVIDER SWITCH
-#  Default: Ollama (local, free) for the app/demo.
-#  Set LLM_PROVIDER=openai for benchmarks (stable, fast, consistent).
-# ======================================================================
 PROVIDER = os.getenv("LLM_PROVIDER", "ollama").lower()
-
 OLLAMA_LLM = os.getenv("OLLAMA_MODEL", "llama3.2")
 OLLAMA_EMBED = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
 
@@ -44,33 +38,21 @@ print("=" * 60)
 print(f"⚙️  INITIALISING RAG ENGINE — provider: {PROVIDER.upper()}")
 
 if PROVIDER == "openai":
-    # Cloud — stable & fast, used for benchmarking
     LLM_NAME = "gpt-4o-mini"
     EMBED_NAME = "text-embedding-3-small"
     Settings.llm = OpenAI(model=LLM_NAME, temperature=0.1)
     Settings.embed_model = OpenAIEmbedding(model=EMBED_NAME)
     print(f"☁️  LLM: {LLM_NAME}  |  Embeddings: {EMBED_NAME}")
 else:
-    # Local — free & private, used for the demo
     LLM_NAME = OLLAMA_LLM
     EMBED_NAME = OLLAMA_EMBED
     Settings.llm = Ollama(model=OLLAMA_LLM, request_timeout=120.0)
     Settings.embed_model = OllamaEmbedding(model_name=OLLAMA_EMBED)
     print(f"🦙 LLM: {LLM_NAME}  |  Embeddings: {EMBED_NAME}")
 
-Settings.node_parser = SentenceSplitter(chunk_size=600, chunk_overlap=80)
-print("⚙️  Chunking: size=600, overlap=80")
-print("=" * 60)
-
-
-# ======================================================================
-#  CHUNKING STRATEGY SWITCH
-#  Default: sentence (fixed-size). Set CHUNKING=semantic for benchmarks.
-# ======================================================================
 CHUNKING = os.getenv("CHUNKING", "sentence").lower()
 
 if CHUNKING == "semantic":
-    # Semantic: splits where meaning shifts (uses embeddings)
     Settings.node_parser = SemanticSplitterNodeParser(
         buffer_size=1,
         breakpoint_percentile_threshold=95,
@@ -78,14 +60,9 @@ if CHUNKING == "semantic":
     )
     print(f"✂️  Chunking: SEMANTIC (breakpoint=95%)")
 else:
-    # Sentence: fixed-size (default)
     Settings.node_parser = SentenceSplitter(chunk_size=600, chunk_overlap=80)
     print(f"✂️  Chunking: SENTENCE (size=600, overlap=80)")
 
-
-# ======================================================================
-#  SYSTEM PROMPT
-# ======================================================================
 SYSTEM_PROMPT = (
     "You are a helpful assistant that answers questions ONLY using the "
     "provided context from the user's documents.\n"
@@ -100,19 +77,8 @@ SYSTEM_PROMPT = (
     "NOT in LaTeX notation. Avoid backslash commands like \\mathbb."
 )
 
-# ======================================================================
-#  HELPERS
-# ======================================================================
-
 
 def _get_collection():
-    """
-    Open (or create) the Chroma collection. The name includes both the
-    embedding model AND the chunking strategy, since each combination
-    produces a different set of chunks.
-
-    :return: The Chroma collection object.
-    """
     db = chromadb.PersistentClient(path="./chroma_db")
     safe_embed = EMBED_NAME.replace("-", "_").replace(":", "_")
     collection_name = f"collection_{safe_embed}_{CHUNKING}"
@@ -123,11 +89,6 @@ def _get_collection():
 
 
 def compute_file_hash(file_path: str) -> str:
-    """Compute a SHA-256 hash of a file's CONTENT (not its name).
-
-    :param file_path: Path to the file on disk.
-    :return: The hex digest string.
-    """
     sha = hashlib.sha256()
     with open(file_path, "rb") as f:
         for block in iter(lambda: f.read(8192), b""):
@@ -138,13 +99,6 @@ def compute_file_hash(file_path: str) -> str:
 
 
 def get_indexed_file_info(chroma_collection) -> dict:
-    """Build a map of {file_name: set_of_hashes} from the metadata stored on
-
-    every chunk.
-
-    :param chroma_collection: The Chroma collection object.
-    :return: dict mapping file names to the set of stored hashes.
-    """
     info = {}
     if chroma_collection.count() == 0:
         print("ℹ️  [Index] Collection is empty (no files indexed yet)")
@@ -164,18 +118,12 @@ def get_indexed_file_info(chroma_collection) -> dict:
 
 
 def _make_unique_name(folder: str, file_name: str) -> str:
-    """Generate a non-clashing name like 'report_1.pdf', 'report_2.pdf'...
-
-    :param folder: The documents folder.
-    :param file_name: The original (clashing) file name.
-    :return: A new unique file name.
-    """
     existing_names = set(get_indexed_file_info(_get_collection()).keys())
     base, ext = os.path.splitext(file_name)
     candidate = file_name
     i = 1
     while candidate in existing_names or os.path.exists(
-        os.path.join(folder, candidate)
+            os.path.join(folder, candidate)
     ):
         candidate = f"{base}_{i}{ext}"
         i += 1
@@ -184,66 +132,34 @@ def _make_unique_name(folder: str, file_name: str) -> str:
 
 
 def _embed_one_file(path: str, file_name: str, file_hash: str, storage_context):
-    """Read a single file, attach metadata, then embed and store it.
-
-    :param path: Path to the file on disk.
-    :param file_name: The name to store in the metadata.
-    :param file_hash: The content hash to store in the metadata.
-    :param storage_context: The StorageContext pointing at Chroma.
-    :return: None
-    """
     print(f"\n📄 [Parse] Reading '{file_name}'...")
     docs = SimpleDirectoryReader(input_files=[path]).load_data()
     print(f"📄 [Parse] '{file_name}' -> {len(docs)} document section(s)")
 
     for d in docs:
-        # Join them so BM25 and embeddings recognise the full word.
         cleaned = d.get_content().replace("-\n", "").replace("- ", "")
-        d.set_content(cleaned)  # write via the proper method
-
+        d.set_content(cleaned)
         d.metadata["file_name"] = file_name
         d.metadata["file_hash"] = file_hash
 
-    print(
-        f"🔢 [Embed] Creating embeddings & storing in Chroma "
-        f"(runs locally via Ollama)..."
-    )
-    VectorStoreIndex.from_documents(
-        documents=docs, storage_context=storage_context
-    )
+    print(f"🔢 [Embed] Creating embeddings & storing in Chroma...")
+    VectorStoreIndex.from_documents(documents=docs, storage_context=storage_context)
     print(f"✅ [Embed] '{file_name}' stored successfully")
 
 
 def _build_filter(file_names):
-    """Build a LlamaIndex MetadataFilters object that matches ANY of the given
-
-    file name. Returns None if no filtering needed.
-
-    :param file_name: List of file names to restrict the search to.
-    :return: A MetadataFilters object, or None for 'search everything'.
-    """
     if not file_names:
-        return None  # No filter -> search all
-
+        return None
     filters = MetadataFilters(
-        filters=[
-            MetadataFilter(key="file_name", value=fn) for fn in file_names
-        ],
-        condition=FilterCondition.OR,  # match ANY of these files
+        filters=[MetadataFilter(key="file_name", value=fn) for fn in file_names],
+        condition=FilterCondition.OR,
     )
     return filters
 
 
 def get_index_stats():
-    """Collect statistics about the indexed knowledge base for the UI.
-
-    :return: A dict with total docs, total chunks, per-file chunk counts, and
-        the active model names.
-    """
     coll = _get_collection()
     total_chunks = coll.count()
-
-    # Count chunks PER file by reading the metadata
     per_file = {}
     if total_chunks > 0:
         data = coll.get(include=["metadatas"])
@@ -261,20 +177,11 @@ def get_index_stats():
     }
     return stats
 
-def grade_chunks(question: str, nodes) -> str:
-    """
-    CRAG grader: ask the LLM whether the retrieved chunks are relevant.
 
-    :param question: The user's question.
-    :param nodes: The retrieved source nodes.
-    :return: 'relevant', 'irrelevant', or 'ambiguous'.
-    """
+def grade_chunks(question: str, nodes) -> str:
     if not nodes:
         return "irrelevant"
-
-    # Give the grader MORE context (full chunks, not 300 chars)
     context = "\n---\n".join(n.text for n in nodes[:3])
-
     prompt = (
         "You are a relevance grader. Decide if the CONTEXT contains "
         "information RELATED to the QUESTION's topic.\n"
@@ -285,77 +192,195 @@ def grade_chunks(question: str, nodes) -> str:
         f"CONTEXT:\n{context[:2000]}\n\n"
         "Grade:"
     )
-
     response = str(Settings.llm.complete(prompt)).strip().lower()
     print(f"⚖️  [CRAG] '{question[:30]}' -> {response}")
-
-    # Only mark irrelevant if explicitly so (lenient default)
     if "irrelevant" in response:
         return "irrelevant"
     return "relevant"
 
-def get_crag_query_engine(index, file_names=None, use_hybrid=True,
-                          top_k_retrieve=10, top_n_rerank=3):
-    """
-    Build a CRAG-style query engine: retrieve → grade → act.
-    Returns an object with a .query(question) method that grades the
-    retrieved context before answering.
 
-    :param index: The VectorStoreIndex.
-    :param file_names: Optional file filter.
-    :param use_hybrid: Use hybrid retrieval if True.
-    :param top_k_retrieve: Candidates per retriever.
-    :param top_n_rerank: Chunks after reranking.
-    :return: A CRAGQueryEngine instance.
-    """
+def get_crag_query_engine(index, file_names=None, use_hybrid=True, top_k_retrieve=10, top_n_rerank=3):
     print(f"\n🔄 [CRAG] Building CRAG query engine (hybrid={use_hybrid})")
-
-    # Reuse the hybrid retriever + reranker (or basic vector)
     if use_hybrid:
         nodes = _load_nodes_from_chroma(file_names=file_names)
         if not nodes:
             return None
-        bm25 = BM25Retriever.from_defaults(
-            nodes=nodes, similarity_top_k=top_k_retrieve
-        )
+        bm25 = BM25Retriever.from_defaults(nodes=nodes, similarity_top_k=top_k_retrieve)
         filters = _build_filter(file_names)
-        vector = index.as_retriever(
-            similarity_top_k=top_k_retrieve, filters=filters
-        )
+        vector = index.as_retriever(similarity_top_k=top_k_retrieve, filters=filters)
         retriever = QueryFusionRetriever(
             [vector, bm25], similarity_top_k=top_k_retrieve,
             num_queries=1, mode="reciprocal_rerank", use_async=False,
         )
         reranker = SentenceTransformerRerank(
-            model="cross-encoder/ms-marco-MiniLM-L-6-v2",
-            top_n=top_n_rerank,
+            model="cross-encoder/ms-marco-MiniLM-L-6-v2", top_n=top_n_rerank,
         )
         postprocessors = [reranker]
     else:
         filters = _build_filter(file_names)
-        retriever = index.as_retriever(
-            similarity_top_k=top_n_rerank, filters=filters
-        )
+        retriever = index.as_retriever(similarity_top_k=top_n_rerank, filters=filters)
         postprocessors = []
 
     return CRAGQueryEngine(retriever, postprocessors)
 
 
-# ======================================================================
-#  CLASSIFY  ->  PROCESS
-# ======================================================================
+def add_contextual_documents(documents_folder: str, only_files: list, collection_suffix: str = "contextual"):
+    import time
+    db = chromadb.PersistentClient(path="./chroma_db")
+    safe_embed = EMBED_NAME.replace("-", "_").replace(":", "_")
+    coll_name = f"collection_{safe_embed}_{collection_suffix}"
+    coll = db.get_or_create_collection(coll_name)
+    print(f"📦 [Contextual] Collection '{coll_name}' ({coll.count()} chunks already stored)")
+
+    vector_store = ChromaVectorStore(chroma_collection=coll)
+    storage_context = StorageContext.from_defaults(vector_store=vector_store)
+    splitter = SentenceSplitter(chunk_size=600, chunk_overlap=80)
+
+    total = 0
+    for file_name in only_files:
+        path = os.path.join(documents_folder, file_name)
+        if not os.path.isfile(path):
+            print(f"⚠️  [Contextual] SKIPPING missing file: {file_name}")
+            continue
+
+        print(f"\n📄 [Contextual] Processing '{file_name}'...")
+        docs = SimpleDirectoryReader(input_files=[path]).load_data()
+        nodes = splitter.get_nodes_from_documents(docs)
+        print(f"📄 [Contextual] {len(nodes)} chunks to contextualise...")
+
+        contextualised = []
+        for i, node in enumerate(nodes):
+            chunk_text = node.get_content()
+            context_prompt = (
+                "Give a SHORT context (one sentence) situating this chunk "
+                "within its document, to improve search retrieval. "
+                "State the topic or section it belongs to. Be concise.\n\n"
+                f"Document: {file_name}\n"
+                f"Chunk:\n{chunk_text[:800]}\n\n"
+                "Short context:"
+            )
+
+            header = ""
+            for attempt in range(3):
+                try:
+                    header = str(Settings.llm.complete(context_prompt)).strip()
+                    break
+                except Exception as e:
+                    wait = 2 ** attempt
+                    print(f"   ⚠️ [Contextual] Retry {attempt + 1}/3: {e}")
+                    time.sleep(wait)
+            else:
+                print(f"   ❌ [Contextual] Gave up on chunk {i} — using empty header")
+
+            new_text = f"[Context: {header}]\n{chunk_text}"
+            node.set_content(new_text)
+            node.metadata["file_name"] = file_name
+            node.metadata["contextualised"] = True
+            contextualised.append(node)
+
+            time.sleep(0.05)
+            if (i + 1) % 50 == 0:
+                print(f"   ...{i + 1}/{len(nodes)} chunks done")
+
+        print(f"🔢 [Contextual] Embedding {len(contextualised)} chunks...")
+        VectorStoreIndex(contextualised, storage_context=storage_context)
+        total += len(contextualised)
+    return total
+
+
+def add_contextual_from_existing(source_suffix: str = "sentence", target_suffix: str = "contextual"):
+    import hashlib
+    import json
+    import time
+    from llama_index.core.schema import TextNode
+
+    safe_embed = EMBED_NAME.replace("-", "_").replace(":", "_")
+    db = chromadb.PersistentClient(path="./chroma_db")
+
+    src_name = f"collection_{safe_embed}_{source_suffix}"
+    src = db.get_or_create_collection(src_name)
+    if src.count() == 0:
+        print(f"❌ Source '{src_name}' is empty! Build it first.")
+        return 0
+    print(f"📦 [Source] '{src_name}' ({src.count()} chunks)")
+
+    tgt_name = f"collection_{safe_embed}_{target_suffix}"
+    try:
+        db.delete_collection(tgt_name)
+    except Exception:
+        pass
+    tgt = db.get_or_create_collection(tgt_name)
+    print(f"📦 [Target] '{tgt_name}' (fresh)")
+
+    cache_path = "contextual_cache.json"
+    if os.path.exists(cache_path):
+        with open(cache_path) as f:
+            cache = json.load(f)
+        print(f"💾 [Cache] {len(cache)} cached headers")
+    else:
+        cache = {}
+
+    def save_cache():
+        with open(cache_path, "w") as f:
+            json.dump(cache, f)
+
+    # 🚨 FIX: Τραβάμε και τα αυθεντικά IDs από τη Chroma
+    data = src.get(include=["documents", "metadatas"])
+    ids = data["ids"]
+    texts = data["documents"]
+    metas = data["metadatas"]
+    print(f"📄 Contextualising {len(texts)} chunks (same count as source!)...")
+
+    storage_context = StorageContext.from_defaults(
+        vector_store=ChromaVectorStore(chroma_collection=tgt)
+    )
+
+    contextualised = []
+    # 🚨 FIX: Κάνουμε zip και το node_id
+    for i, (node_id, text, md) in enumerate(zip(ids, texts, metas)):
+        md = md or {}
+        fname = md.get("file_name", "document")
+        key = hashlib.sha256(text.encode()).hexdigest()[:16]
+
+        if key in cache:
+            header = cache[key]
+        else:
+            prompt = (
+                "Give a SHORT context (one sentence) situating this chunk "
+                "within its document, to improve search retrieval. "
+                "State the topic/section. Be concise.\n\n"
+                f"Document: {fname}\nChunk:\n{text[:800]}\n\nShort context:"
+            )
+            header = ""
+            for attempt in range(3):
+                try:
+                    header = str(Settings.llm.complete(prompt)).strip()
+                    break
+                except Exception as e:
+                    wait = 2 ** attempt
+                    print(f"    ⚠️ Retry {attempt + 1}/3: {e} ({wait}s)")
+                    time.sleep(wait)
+            cache[key] = header
+            time.sleep(0.05)
+            if len(cache) % 25 == 0:
+                save_cache()
+
+        new_text = f"[Context: {header}]\n{text}"
+        # 🚨 FIX: Περνάμε το αυθεντικό node_id στο TextNode
+        node = TextNode(text=new_text, metadata=md, id_=node_id)
+        contextualised.append(node)
+
+        if (i + 1) % 50 == 0:
+            print(f"   ...{i + 1}/{len(texts)}")
+
+    save_cache()
+    print(f"🔢 Embedding {len(contextualised)} chunks...")
+    VectorStoreIndex(contextualised, storage_context=storage_context)
+    print(f"✅ Done! {len(contextualised)} chunks (matches source: {len(contextualised) == src.count()})")
+    return len(contextualised)
 
 
 def classify_files(documents_folder: str = "data"):
-    """Classify each file WITHOUT embedding:
-
-    - 'to_skip'   : identical content already indexed (same hash)
-    - 'conflicts' : same NAME exists but content is DIFFERENT (new hash)
-    - 'to_add'    : brand-new file
-
-    :param documents_folder: Folder with the uploaded files.
-    :return: (classification dict, file_hashes dict {name: hash}).
-    """
     print(f"\n{'=' * 60}")
     print(f"🔍 [Classify] Scanning folder '{documents_folder}'...")
 
@@ -384,29 +409,10 @@ def classify_files(documents_folder: str = "data"):
             classification["to_add"].append(file_name)
             print(f"   🆕 '{file_name}' -> ADD (brand new)")
 
-    print(
-        f"🔍 [Classify] Summary: "
-        f"{len(classification['to_add'])} to add, "
-        f"{len(classification['conflicts'])} conflicts, "
-        f"{len(classification['to_skip'])} to skip"
-    )
-    print("=" * 60)
     return classification, file_hashes
 
 
-def process_files(
-    documents_folder, classification, file_hashes, decisions: dict
-):
-    """Apply the actual work based on classification and user decisions.
-
-    This is where embeddings happen.
-
-    :param documents_folder: The documents folder.
-    :param classification: dict from classify_files().
-    :param file_hashes: dict mapping file name -> hash.
-    :param decisions: dict {file_name: "replace" | "keep_both"} for conflicts.
-    :return: A report dict describing what happened.
-    """
+def process_files(documents_folder, classification, file_hashes, decisions: dict):
     print(f"\n{'=' * 60}")
     print("⚙️  [Process] Starting embedding work...")
 
@@ -414,20 +420,13 @@ def process_files(
     vector_store = ChromaVectorStore(chroma_collection=coll)
     storage_context = StorageContext.from_defaults(vector_store=vector_store)
 
-    report = {
-        "added": [],
-        "skipped": list(classification["to_skip"]),
-        "replaced": [],
-        "kept_both": [],
-    }
+    report = {"added": [], "skipped": list(classification["to_skip"]), "replaced": [], "kept_both": []}
 
-    # Brand-new files
     for fn in classification["to_add"]:
         path = os.path.join(documents_folder, fn)
         _embed_one_file(path, fn, file_hashes[fn], storage_context)
         report["added"].append(fn)
 
-    # Conflicts -> follow the user's choice
     for fn in classification["conflicts"]:
         choice = decisions.get(fn, "replace")
         path = os.path.join(documents_folder, fn)
@@ -438,124 +437,55 @@ def process_files(
             coll.delete(where={"file_name": fn})
             _embed_one_file(path, fn, file_hashes[fn], storage_context)
             report["replaced"].append(fn)
-        else:  # keep_both
+        else:
             new_name = _make_unique_name(documents_folder, fn)
             new_path = os.path.join(documents_folder, new_name)
             os.rename(path, new_path)
-            _embed_one_file(
-                new_path, new_name, file_hashes[fn], storage_context
-            )
+            _embed_one_file(new_path, new_name, file_hashes[fn], storage_context)
             report["kept_both"].append(f"{fn} -> {new_name}")
 
-    print(f"\n⚙️  [Process] Done. Report: {report}")
-    print("=" * 60)
     return report
 
-def get_hyde_query_engine(
-    index,
-    file_names=None,
-    use_hybrid=True,
-    top_k_retrieve=10,
-    top_n_rerank=3,
-):
-    """Build a QUERY engine with HyDE (Hypothetical Document Embeddings).
 
-    HyDE first asks the LLM to write a hypothetical answer, then searches with
-    THAT (richer) text instead of the short question.
-
-    Note: this is a query engine (no chat memory) — ideal for benchmarking.
-
-    :param index: The VectorStoreIndex.
-    :param file_names: Optional file filter.
-    :param use_hybrid: If True, use hybrid retrieval under the hood.
-    :param top_k_retrieve: Candidates per retriever.
-    :param top_n_rerank: Chunks after reranking.
-    :return: A query engine with HyDE applied.
-    """
+def get_hyde_query_engine(index, file_names=None, use_hybrid=True, top_k_retrieve=10, top_n_rerank=3):
     print(f"\n🔮 [HyDE] Building HyDE query engine (hybrid={use_hybrid})")
-
-    # Build the underlying retriever (reuse hybrid logic)
     if use_hybrid:
         nodes = _load_nodes_from_chroma(file_names=file_names)
         if not nodes:
             return None
-        bm25 = BM25Retriever.from_defaults(
-            nodes=nodes, similarity_top_k=top_k_retrieve
-        )
+        bm25 = BM25Retriever.from_defaults(nodes=nodes, similarity_top_k=top_k_retrieve)
         filters = _build_filter(file_names)
-        vector = index.as_retriever(
-            similarity_top_k=top_k_retrieve, filters=filters
-        )
+        vector = index.as_retriever(similarity_top_k=top_k_retrieve, filters=filters)
         retriever = QueryFusionRetriever(
-            [vector, bm25],
-            similarity_top_k=top_k_retrieve,
-            num_queries=1,
-            mode="reciprocal_rerank",
-            use_async=False,
+            [vector, bm25], similarity_top_k=top_k_retrieve,
+            num_queries=1, mode="reciprocal_rerank", use_async=False,
         )
         reranker = SentenceTransformerRerank(
-            model="cross-encoder/ms-marco-MiniLM-L-6-v2",
-            top_n=top_n_rerank,
+            model="cross-encoder/ms-marco-MiniLM-L-6-v2", top_n=top_n_rerank
         )
         postprocessors = [reranker]
     else:
         filters = _build_filter(file_names)
-        retriever = index.as_retriever(
-            similarity_top_k=top_n_rerank, filters=filters
-        )
+        retriever = index.as_retriever(similarity_top_k=top_n_rerank, filters=filters)
         postprocessors = []
 
-    # Build a base query engine from the retriever
     from llama_index.core.query_engine import RetrieverQueryEngine
-
-    base_engine = RetrieverQueryEngine.from_args(
-        retriever=retriever,
-        node_postprocessors=postprocessors,
-    )
-
-    # Wrap it with HyDE
+    base_engine = RetrieverQueryEngine.from_args(retriever=retriever, node_postprocessors=postprocessors)
     hyde = HyDEQueryTransform(include_original=True)
     hyde_engine = TransformQueryEngine(base_engine, query_transform=hyde)
-
-    print("✅ [HyDE] Query engine ready!")
     return hyde_engine
 
 
-# ======================================================================
-#  LOAD  &  CHAT
-# ======================================================================
-
-
 def load_index():
-    """Load the existing index from Chroma WITHOUT re-embedding anything.
-
-    :return: A VectorStoreIndex if the collection has data, else None.
-    """
     coll = _get_collection()
     if coll.count() == 0:
-        print("⚠️  [Load] Nothing to load — collection is empty")
         return None
     vector_store = ChromaVectorStore(chroma_collection=coll)
-    index = VectorStoreIndex.from_vector_store(vector_store)
-    print(f"✅ [Load] Loaded index with {coll.count()} chunks")
-    return index
+    return VectorStoreIndex.from_vector_store(vector_store)
 
 
 def get_chat_engine(index, file_names=None):
-    """Build a basic chat engine (vector search only) with conversational
-
-    memory and a system prompt that enforces document-grounded answers.
-
-    :param index: The VectorStoreIndex created/loaded earlier.
-    :param file_names: Optional list of file names to restrict search to.
-    :return: A chat engine exposing a .chat(message) method.
-    """
     filters = _build_filter(file_names=file_names)
-    if filters:
-        print(f"💬 [Engine] BASIC chat engine — filtered to: {file_names}")
-    else:
-        print("💬 [Engine] BASIC chat engine — searching ALL documents")
-
     chat_engine = index.as_chat_engine(
         chat_mode="condense_plus_context",
         similarity_top_k=5,
@@ -567,223 +497,96 @@ def get_chat_engine(index, file_names=None):
 
 
 def _load_nodes_from_chroma(file_names=None):
-    """Pull stored chunks out of Chroma and rebuild as TextNode objects.
-
-    Optionally keep only chunks belonging to the given files — this is how we
-    apply filtering to BM25 (which has no native metadata filter).
-
-    :param file_names: Optional list of file names to keep. None = all.
-    :return: A list of TextNode objects, or [] if nothing matches.
-    """
     coll = _get_collection()
     if coll.count() == 0:
         return []
 
     data = coll.get(include=["documents", "metadatas"])
     nodes = []
-    for node_id, text, md in zip(
-        data["ids"], data["documents"], data["metadatas"]
-    ):
+    for node_id, text, md in zip(data["ids"], data["documents"], data["metadatas"]):
         md = md or {}
-        # FILTER for BM25: skip chunks not in the selected files
         if file_names and md.get("file_name") not in file_names:
             continue
         nodes.append(TextNode(text=text, metadata=md, id_=node_id))
-
-    scope = file_names if file_names else "ALL files"
-    print(f"🔁 [BM25] Reconstructed {len(nodes)} nodes (scope: {scope})")
     return nodes
 
 
-def get_hybrid_chat_engine(
-    index,
-    file_names=None,
-    top_k_retrieve: int = 10,
-    top_n_rerank: int = 3,
-):
-    """Build an advanced chat engine: hybrid search (vector + BM25) + reranker,
-
-    optionally restricted to specific files.
-
-    The vector side uses native metadata filters; the BM25 side uses
-    pre-filtered nodes — so BOTH respect the file selection.
-
-    :param index: The VectorStoreIndex (loaded from Chroma).
-    :param file_names: Optional list of file names to restrict search to.
-    :param top_k_retrieve: How many candidates each retriever pulls.
-    :param top_n_rerank: How many chunks survive after reranking.
-    :return: A chat engine, or None if no matching documents.
-    """
+def get_hybrid_chat_engine(index, file_names=None, top_k_retrieve: int = 10, top_n_rerank: int = 3):
     scope = file_names if file_names else "ALL documents"
     print(f"\n🚀 [Engine] Building HYBRID chat engine (scope: {scope})")
 
-    # --- BM25 side: build from FILTERED nodes ---
     nodes = _load_nodes_from_chroma(file_names=file_names)
     if not nodes:
-        print("⚠️  [Engine] No nodes for the selected files")
         return None
 
-    bm25_retriever = BM25Retriever.from_defaults(
-        nodes=nodes,
-        similarity_top_k=top_k_retrieve,
-    )
-    print("   ✓ BM25 retriever ready (keyword search, filtered)")
-
-    # --- Vector side: use NATIVE metadata filters ---
+    bm25_retriever = BM25Retriever.from_defaults(nodes=nodes, similarity_top_k=top_k_retrieve)
     filters = _build_filter(file_names)
-    vector_retriever = index.as_retriever(
-        similarity_top_k=top_k_retrieve,
-        filters=filters,  # native filter (or None)
-    )
-    print("   ✓ Vector retriever ready (semantic search, filtered)")
-
-    # --- Fuse with Reciprocal Rank Fusion ---
+    vector_retriever = index.as_retriever(similarity_top_k=top_k_retrieve, filters=filters)
     hybrid_retriever = QueryFusionRetriever(
-        [vector_retriever, bm25_retriever],
-        similarity_top_k=top_k_retrieve,
-        num_queries=1,
-        mode="reciprocal_rerank",
-        use_async=False,
+        [vector_retriever, bm25_retriever], similarity_top_k=top_k_retrieve,
+        num_queries=1, mode="reciprocal_rerank", use_async=False,
     )
-    print("   ✓ Fusion retriever ready (RRF)")
+    reranker = SentenceTransformerRerank(model="cross-encoder/ms-marco-MiniLM-L-6-v2", top_n=top_n_rerank)
 
-    # --- Reranker ---
-    reranker = SentenceTransformerRerank(
-        model="cross-encoder/ms-marco-MiniLM-L-6-v2",
-        top_n=top_n_rerank,
+    return CondensePlusContextChatEngine.from_defaults(
+        retriever=hybrid_retriever, node_postprocessors=[reranker], system_prompt=SYSTEM_PROMPT, verbose=False
     )
-    print("   ✓ Cross-encoder reranker ready")
-
-    # --- Wrap in chat engine with memory + system prompt ---
-    chat_engine = CondensePlusContextChatEngine.from_defaults(
-        retriever=hybrid_retriever,
-        node_postprocessors=[reranker],
-        system_prompt=SYSTEM_PROMPT,
-        verbose=False,
-    )
-    print("✅ [Engine] Hybrid chat engine ready!")
-    return chat_engine
 
 
 def list_indexed_files():
-    """Return the list of distinct file names currently stored in the index.
-
-    Used to populate the UI (checkboxes / router options)
-
-    :return: A Sorted list of file names.
-    """
     coll = _get_collection()
     info = get_indexed_file_info(coll)
-    files = sorted(info.keys())
-    print(f"📚 [Files] Indexed documents: {files}")
-    return files
+    return sorted(info.keys())
 
 
 def route_question_to_files(question: str, available_files: list):
-    """Ask the LLM which document(s) are most relevant. Inclusive routing.
-
-    :param question: The question to route.
-    :param available_files: A sorted list of file names in the index.
-    :return: A list of file names the LLM finds relevant.
-    """
-    if not available_files:
-        return []
-
-    if len(available_files) == 1:
-        print("🧭 [Router] Only one file — using it directly")
+    if not available_files or len(available_files) == 1:
         return available_files
 
     file_list = "\n".join(f"{i}. {f}" for i, f in enumerate(available_files))
-
     prompt = (
         "You are a document router for a search system.\n"
-        "Given a question and a list of documents, return the numbers of "
-        "ALL documents that COULD plausibly contain the answer.\n"
-        "Be INCLUSIVE: if a document is even somewhat related, include it.\n"
-        "IMPORTANT: respond with ONLY comma-separated numbers and NOTHING "
-        "else. Example: 0,2,3\n\n"
-        f"Documents:\n{file_list}\n\n"
-        f"Question: {question}\n\n"
-        "Numbers:"
+        "Given a question and a list of documents, return the numbers of ALL documents...\n"
+        f"Documents:\n{file_list}\n\nQuestion: {question}\n\nNumbers:"
     )
-
     response = str(Settings.llm.complete(prompt))
-    print(f"🧭 [Router] LLM raw response: {response.strip()}")
-
-    # ROBUST PARSING: extract ALL integers from anywhere in the response,
-    # even if the model added chatty text around them.
     found_numbers = re.findall(r"\d+", response)
 
     selected = []
     for token in found_numbers:
         idx = int(token)
-        if (
-            0 <= idx < len(available_files)
-            and available_files[idx] not in selected
-        ):
+        if 0 <= idx < len(available_files) and available_files[idx] not in selected:
             selected.append(available_files[idx])
-
-    # Safety net: parsing failed -> use ALL files
-    if not selected:
-        print("🧭 [Router] Could not parse -> using ALL files")
-        return available_files
-
-    print(
-        f"🧭 [Router] Selected {len(selected)}/{len(available_files)}: "
-        f"{selected}"
-    )
-    return selected
+    return selected if selected else available_files
 
 
 from llama_index.core import QueryBundle
 
-class CRAGQueryEngine:
-    """
-    A Corrective-RAG query engine: retrieves, grades the context, and
-    only answers if the context is relevant — otherwise returns an
-    honest "not found" response.
-    """
 
+class CRAGQueryEngine:
     def __init__(self, retriever, postprocessors):
         self.retriever = retriever
         self.postprocessors = postprocessors
 
     def query(self, question: str):
-        """Retrieve, grade, then answer or refuse."""
-        # 1) Retrieve
         bundle = QueryBundle(question)
         nodes = self.retriever.retrieve(bundle)
-
-        # 2) Apply postprocessors (reranker)
         for pp in self.postprocessors:
             nodes = pp.postprocess_nodes(nodes, query_bundle=bundle)
 
-        # 3) GRADE the retrieved context (the CRAG step)
         grade = grade_chunks(question, nodes)
-
-        # 4) Act on the grade
         if grade == "irrelevant":
-            answer = ("I couldn't find relevant information to answer "
-                      "that in the provided documents.")
+            answer = "I couldn't find relevant information to answer that in the provided documents."
         else:
-            # Build context & answer (relevant or ambiguous)
             context = "\n---\n".join(n.text for n in nodes)
-            prefix = "" if grade == "relevant" else (
-                "Note: the documents only loosely cover this. "
-            )
-            prompt = (
-                f"{SYSTEM_PROMPT}\n\n"
-                f"Context:\n{context}\n\n"
-                f"Question: {question}\n\nAnswer:"
-            )
+            prefix = "" if grade == "relevant" else "Note: the documents only loosely cover this. "
+            prompt = f"{SYSTEM_PROMPT}\n\nContext:\n{context}\n\nQuestion: {question}\n\nAnswer:"
             answer = prefix + str(Settings.llm.complete(prompt))
 
-        # Wrap in a simple response object (Ragas-compatible)
         return CRAGResponse(answer, nodes)
 
-class CRAGResponse:
-    """Minimal response wrapper compatible with our benchmark scripts."""
 
+class CRAGResponse:
     def __init__(self, answer, source_nodes):
         self._answer = answer
         self.source_nodes = source_nodes

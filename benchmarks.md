@@ -66,15 +66,15 @@ short question.
 | Configuration | Faithfulness | Answer Rel. | Context Prec. |
 |---------------|:------------:|:-----------:|:-------------:|
 | Vector only   |    0.951     |    0.942    |     0.928     |
-| Vector + HyDE |    0.983     |    0.952    |   **1.000**   |
-| **Δ**         |  **+0.033**  |   +0.011    |  **+0.072**   |
+| Vector + HyDE |    0.983     |    0.952    |   **1.000** |
+| **Δ** |  **+0.033** |   +0.011    |  **+0.072** |
 
 ### On Hybrid + Rerank (HyDE's effect is masked)
 | Configuration       | Faithfulness | Answer Rel. | Context Prec. |
 |---------------------|:------------:|:-----------:|:-------------:|
 | Hybrid + Rerank     |    0.948     |    0.939    |     0.931     |
 | + HyDE              |    0.969     |    0.942    |     0.931     |
-| **Δ**               |   +0.022     |   +0.003    |   **0.000**   |
+| **Δ** |   +0.022     |   +0.003    |   **0.000** |
 
 ### Context Precision by Domain (Vector + HyDE)
 | Domain    | Vector | + HyDE |    Δ     |
@@ -100,7 +100,7 @@ them costs an extra LLM call for zero retrieval gain.
 |-----------|:------------:|:-----------:|:-------------:|:------:|
 | Sentence  |    0.954     |    0.939    |     0.903     |  6455  |
 | Semantic  |    0.825     |    0.784    |     0.806     |  8896  |
-| **Δ**     |  **−0.129**  | **−0.155**  |   **−0.097**  |  +38%  |
+| **Δ** |  **−0.129** | **−0.155** |   **−0.097** |  +38%  |
 
 ### Context Precision by Domain
 | Domain    | Sentence | Semantic |    Δ     |
@@ -118,6 +118,7 @@ smaller) chunks, reducing context per chunk. Fixed-size chunking is more
 robust for technical/mathematical content.
 
 ---
+
 ## Table 4 — CRAG (Corrective RAG)
 
 CRAG adds a relevance-grading step: before answering, the LLM judges
@@ -151,8 +152,26 @@ recipe?") that the documents don't cover:
 **Takeaway:** The grader is a double-edged sword. On clean, in-scope
 retrieval CRAG adds latency for marginal gain; its real value is
 **rejecting out-of-scope queries** and filtering noisy retrieval.
-```
-`
+
+---
+
+## Table 5 — Contextual Retrieval
+
+Contextual Retrieval prepends an LLM-generated summary to each chunk to prevent loss of context during document splitting. To isolate the contextual variable correctly, this run reuses the exact same 6,455 sentence chunks, injecting a shared vector/keyword identity via matched node IDs.
+
+(on Hybrid + Rerank)
+
+| Configuration        | Faithfulness | Answer Rel. | Context Prec. | Chunks |
+|----------------------|:------------:|:-----------:|:-------------:|:------:|
+| Normal (Hybrid)      |    0.946     |    0.951    |     0.880     |  6455  |
+| Contextual (Hybrid)  |    0.798     |    0.892    |     0.653     |  6455  |
+| **Δ**                |  **−0.148**  | **−0.059**  |  **−0.227**   | **0**  |
+
+**Finding:** Contextual Retrieval **severely degraded performance across all metrics**, with a catastrophic drop in Context Precision (−0.227) and Faithfulness (−0.148). This negative result reveals a critical structural limitation called the **"Thematic Swamping Effect"**, which occurs when applying this technique to continuous, homogeneous corpora like books:
+
+1. **IDF Pollution in BM25:** Because the 6 books have internal thematic continuity, the LLM generated highly repetitive context prefixes (e.g., *"This chunk is from a book on machine learning and optimization..."*). Words like "machine", "learning", and "chapter" became hyper-frequent, completely polluting the Inverse Document Frequency (IDF) weights of the BM25 retriever and blinding lexical matching.
+2. **Vector Space Compression:** Prepending repetitive prefixes diluted the unique semantic vector of each node (`text-embedding-3-small`). It compressed all chunks belonging to the same book into tight, indistinguishable clusters. For granular questions, the retriever pulled adjacent but uninformative chunks, ruining precision.
+3. **Extrapolation Hallucinations:** Because Context Precision tanked, the generation LLM (`gpt-4o-mini`) received instructionally void fragments that matched the *global topic* but missed the *exact answer*. Forced by the system prompt to synthesize a response, the LLM relied on outside knowledge or extrapolation, dragging down Faithfulness to 0.798.
 
 ---
 
@@ -180,12 +199,13 @@ retrieval CRAG adds latency for marginal gain; its real value is
    Its real value is rejecting out-of-scope queries, not refining clean
    retrieval.
 
+7. **Corpus Topology dictates Contextual Retrieval success.** Anthropic’s baseline benchmarks showed +35% improvement because they used large sets of *independent, fragmented documents* (e.g., separate legal contracts, distinct support tickets). In an *already homogeneous corpus* (continuous textbook prose), adding global headers backfires completely, acting as semantic noise and blinding the hybrid retriever.
+
 ---
 
 ## Reproducing These Results
 
-```
-bash
+```bash
 # Foundation: vector vs hybrid+rerank
 LLM_PROVIDER=openai python ab_test.py
 
@@ -196,16 +216,5 @@ LLM_PROVIDER=openai python ab_test_hyde.py
 CHUNKING=sentence LLM_PROVIDER=openai python ab_test_chunking.py
 CHUNKING=semantic LLM_PROVIDER=openai python ab_test_chunking.py
 
-
-> Each configuration uses a separate Chroma collection
-> (`collection_<embed_model>_<chunking>`), so results never mix.
-
----
-
-## Pending (Roadmap)
-
-| Technique               | Status                  |
-|-------------------------|-------------------------|
-| Contextual Retrieval    | ⏳ Not yet measured      |
-| Observability (Phoenix) | ⏳ Tooling, not a metric |
-
+# Contextual Retrieval A/B test (requires cached json or clean run)
+LLM_PROVIDER=openai python ab_test_contextual.py

@@ -258,4 +258,34 @@ ML content at wrong boundaries. Fixed-size chunking proved more robust.
 
 «CRAG (Corrective RAG) BACKFIRED on a clean corpus: −0.13 faithfulness. The grader incorrectly flagged valid content as 'irrelevant' (e.g. rejecting Hawking's black hole content!), causing the system to refuse answers it actually had. Lesson: a self-correction layer is only as good as its grader. On high-quality retrieval, CRAG adds an unreliable gatekeeper + extra latency for negative value. CRAG helps when retrieval is NOISY — not when it's already good.»
 
-🌟 LinkedIn gold: «CRAG's effectiveness hinges entirely on its grader. A strict grader backfired (−0.13), rejecting valid content (even Hawking's black hole passage!). A lenient grader recovered and even improved faithfulness (+0.06, reaching 1.0) — but at the cost of an extra LLM call per query. On clean retrieval, CRAG's grading step adds latency for marginal gain; its real value is filtering NOISY retrieval. The grader itself can become a failure point.»
+🌟 LinkedIn gold: «CRAG's effectiveness hinges entirely on its grader. A strict grader backfired (−0.13), rejecting valid content (even Hawking's black hole passage!). A lenient grader recovered and even improved faithfulness (+0.06, reaching 1.0) — but at the cost of an extra LLM call per query. On clean retrieval, CRAG's grading step adds latency for marginal gain; its real value is filtering NOISY re trieval. The grader itself can become a failure point.»
+
+
+🌟 Το ΜΕΓΑΛΟ μάθημα (τέλειο για LinkedIn!)
+
+Αυτή η κριτική είναι πολύτιμη γιατί προσθέτει ένα insight:
+
+    «My first contextual retrieval benchmark was FLAWED: the contextual version had 7671 chunks vs 6455 baseline — I was comparing different chunkings, not isolating the context headers. A proper ablation requires identical chunks with ONLY the studied variable changed. Controlling confounding variables is the hardest part of experimentation.»
+
+    🎯 Παραδέχεσαι ένα methodological flaw & το διορθώνεις = senior-level εντιμότητα!
+
+
+🎓 Το μάθημα (LESSONS_LEARNED!)
+
+    «A subtle but critical bug: when combining vector (Chroma) and BM25 retrievers for Reciprocal Rank Fusion, both must use the SAME node IDs. I correctly handled this in the main engine but reintroduced the bug in a standalone benchmark script, using artificial IDs (str(i)) for BM25. This broke fusion silently — RRF couldn't match chunks, so the system relied entirely on the reranker. Lesson: shared identity is essential for fusion, and copy-pasting retrieval logic across scripts risks reintroducing solved bugs.»
+
+    🌟 Αυτό το «ίδιο bug, δεύτερη φορά, σε διαφορετικό script» είναι πολύ διδακτικό — δείχνει γιατί χρειάζεται κεντρικοποιημένος κώδικας (DRY)!
+
+
+
+🎓 ΔΥΟ μαθήματα εδώ (και τα δύο gold!)
+Μάθημα #1: Technique value depends on baseline
+
+    Contextual helps weak embeddings, hurts strong ones. Δεν είναι universal.
+
+Μάθημα #2: Getting experiments right is HARD
+
+    Χρειάστηκαν 3 iterations + 2 bug fixes (chunk count, ID mismatch) για έγκυρο αποτέλεσμα. Αυτό είναι το πραγματικό experimental work!
+
+
+

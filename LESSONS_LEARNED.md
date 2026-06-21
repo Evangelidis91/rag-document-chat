@@ -81,14 +81,21 @@ to clean chunk text (`d.text = ...`).
 **Lesson:** Pydantic models often expose read-only properties; construct
 fresh instances instead of mutating.
 
-### 2.4 BM25 node ID alignment
-**Problem:** BM25 (in-memory) and vector (Chroma) retrievers used
-different node IDs, so Reciprocal Rank Fusion couldn't deduplicate the
-same chunk returned by both.
+### 2.4 BM25 Node ID Alignment & The Copy-Paste Trap
+**Problem:** Reciprocal Rank Fusion (RRF) silently failed to merge and deduplicate
+the same chunk returned by both the Vector and BM25 retrievers. The system 
+suboptimally relied entirely on the cross-encoder reranker.
 
-**Solution:** Reused Chroma's IDs when rebuilding TextNodes for BM25.
+**Diagnosis:** While I correctly mapped the Chroma IDs using `id_=node_id` in the 
+main engine, I reintroduced the bug in a standalone benchmark script (`ab_test_contextual.py`) 
+by generating artificial lexical IDs (`id_=str(i)`) for the BM25 nodes.
 
-**Lesson:** Fusion needs a shared identity to merge results correctly.
+**Solution:** Ensured both retrievers extract and use the exact same native Chroma DB 
+UUIDs across all production and evaluation scripts.
+
+**Lesson:** Fusion algorithms require a shared, immutable component identity to merge 
+results. Copy-pasting retrieval logic across parallel scripts bypasses central 
+architectural fixes, highlighting the critical importance of keeping code DRY.
 
 ---
 
@@ -141,14 +148,14 @@ returned *"not found"* despite the topic being well covered.
 
 ### What we tried (and what failed)
 
-| # | Attempt | Result | Why |
-|---|---------|:------:|-----|
-| 1 | Inclusive routing | ❌ | Not a routing-scope problem |
-| 2 | Hybrid (BM25) | ❌ | The word was hyphenated, so even exact match missed it |
-| 3 | Search all docs | ❌ | Problem was in the chunks, not the scope |
-| 4 | Increase top_k | ❌ | More chunks, same wrong ones |
-| 5 | Rephrase ("carbohydrates, proteins, fats") | ✅ | Concept exists; the exact term was the issue |
-| 6 | Strip PDF hyphenation | ✅ | **Root cause fixed** |
+| # | Attempt                                    | Result  | Why                                                    |
+|---|--------------------------------------------|:-------:|--------------------------------------------------------|
+| 1 | Inclusive routing                          |    ❌    | Not a routing-scope problem                            |
+| 2 | Hybrid (BM25)                              |    ❌    | The word was hyphenated, so even exact match missed it |
+| 3 | Search all docs                            |    ❌    | Problem was in the chunks, not the scope               |
+| 4 | Increase top_k                             |    ❌    | More chunks, same wrong ones                           |
+| 5 | Rephrase ("carbohydrates, proteins, fats") |    ✅    | Concept exists; the exact term was the issue           |
+| 6 | Strip PDF hyphenation                      |    ✅    | **Root cause fixed**                                   |
 
 ### Root Cause
 PDF parsing preserved hyphenated line-breaks: **"macronutrient"** was
@@ -156,8 +163,7 @@ stored as **"macro-\nnutrient"** (split across lines). Neither dense
 embeddings nor BM25 could match the full term.
 
 ### Solution
-```
-python
+```python
 cleaned = d.get_content().replace("-\n", "").replace("- ", "")
 ```
 
@@ -232,6 +238,37 @@ ML content at wrong boundaries. Fixed-size chunking proved more robust.
 **Lesson:** Optimal chunking depends on content type. There is no single
 "best" strategy.
 
+### 6.4 CRAG (Corrective RAG) and the Unreliable Gatekeeper
+**Problem:** Running CRAG on a clean, structured corpus backfired, leading to a 
+−0.13 drop in Faithfulness and a collapse in Context Precision.
+
+**Diagnosis:** The relevance grader incorrectly flagged highly valid but complex 
+context passages as "irrelevant" (e.g., rejecting Hawking's textbook black-hole prose). 
+This caused the system to refuse answers it legally possessed. A lenient grader recovered 
+the score but doubled execution latency by adding an extra LLM call per query.
+
+**Lesson:** A self-correction layer is only as robust as its grader. On clean retrieval 
+baselines, CRAG introduces an unreliable gatekeeper for negative ROI. Its true value 
+lies in filtering heavily *noisy* or out-of-scope distributions, not refining clean text.
+
+### 6.5 Contextual Retrieval: The Confounding Baseline Trap
+**Problem:** My initial Contextual Retrieval implementation showed skewed performance 
+comparison matrices because the contextual collection generated 7,671 chunks vs the 
+6,455 chunks baseline.
+
+**Diagnosis:** Prepending the LLM contextual headers *before* running the text splitter 
+caused the sentence chunker to force-split nodes to respect size limits (`size=600`). I was 
+unintentionally benchmarking an entirely different chunking distribution rather than 
+isolating the context prefixes.
+
+**Solution:** Refactored the data processing flow to execute chunking *first*, caching 
+the original structure, and then programmatically attaching the text-injected context 
+headers to identical indices.
+
+**Lesson:** True ablation studies require rigid environmental control. If you change 
+more than one variable simultaneously, your benchmarks are mathematically invalid. 
+Isolating the precise variable is the hardest part of RAG experimentation.
+
 ---
 
 ## 🎯 Meta-Lessons
@@ -250,42 +287,11 @@ ML content at wrong boundaries. Fixed-size chunking proved more robust.
 > property, the fusion-mode name — each was solved by reading the error,
 > not guessing.
 >
-> **5. Honest negative results are valuable.** Showing that a technique
-> *didn't* help (with a clear explanation of why) demonstrates deeper
-> understanding than claiming everything works.
-
-
-
-«CRAG (Corrective RAG) BACKFIRED on a clean corpus: −0.13 faithfulness. The grader incorrectly flagged valid content as 'irrelevant' (e.g. rejecting Hawking's black hole content!), causing the system to refuse answers it actually had. Lesson: a self-correction layer is only as good as its grader. On high-quality retrieval, CRAG adds an unreliable gatekeeper + extra latency for negative value. CRAG helps when retrieval is NOISY — not when it's already good.»
-
-🌟 LinkedIn gold: «CRAG's effectiveness hinges entirely on its grader. A strict grader backfired (−0.13), rejecting valid content (even Hawking's black hole passage!). A lenient grader recovered and even improved faithfulness (+0.06, reaching 1.0) — but at the cost of an extra LLM call per query. On clean retrieval, CRAG's grading step adds latency for marginal gain; its real value is filtering NOISY re trieval. The grader itself can become a failure point.»
-
-
-🌟 Το ΜΕΓΑΛΟ μάθημα (τέλειο για LinkedIn!)
-
-Αυτή η κριτική είναι πολύτιμη γιατί προσθέτει ένα insight:
-
-    «My first contextual retrieval benchmark was FLAWED: the contextual version had 7671 chunks vs 6455 baseline — I was comparing different chunkings, not isolating the context headers. A proper ablation requires identical chunks with ONLY the studied variable changed. Controlling confounding variables is the hardest part of experimentation.»
-
-    🎯 Παραδέχεσαι ένα methodological flaw & το διορθώνεις = senior-level εντιμότητα!
-
-
-🎓 Το μάθημα (LESSONS_LEARNED!)
-
-    «A subtle but critical bug: when combining vector (Chroma) and BM25 retrievers for Reciprocal Rank Fusion, both must use the SAME node IDs. I correctly handled this in the main engine but reintroduced the bug in a standalone benchmark script, using artificial IDs (str(i)) for BM25. This broke fusion silently — RRF couldn't match chunks, so the system relied entirely on the reranker. Lesson: shared identity is essential for fusion, and copy-pasting retrieval logic across scripts risks reintroducing solved bugs.»
-
-    🌟 Αυτό το «ίδιο bug, δεύτερη φορά, σε διαφορετικό script» είναι πολύ διδακτικό — δείχνει γιατί χρειάζεται κεντρικοποιημένος κώδικας (DRY)!
-
-
-
-🎓 ΔΥΟ μαθήματα εδώ (και τα δύο gold!)
-Μάθημα #1: Technique value depends on baseline
-
-    Contextual helps weak embeddings, hurts strong ones. Δεν είναι universal.
-
-Μάθημα #2: Getting experiments right is HARD
-
-    Χρειάστηκαν 3 iterations + 2 bug fixes (chunk count, ID mismatch) για έγκυρο αποτέλεσμα. Αυτό είναι το πραγματικό experimental work!
-
-
-
+> **5. Honest negative results are valuable.** Documenting that advanced 
+> workflows like CRAG or Contextual Retrieval *failed* on this corpus—and proving 
+> *why* via structural and lexical dynamics—demonstrates a higher engineering 
+> caliber than claiming every industry trend works out of the box.
+>
+> **6. RAG Rigor is an Iterative Game.** Getting valid, scientific evaluation 
+> metrics required 3 architectural iterations and 2 underlying framework bug 
+> fixes. Reliable AI systems are engineered, not prompted.

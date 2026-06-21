@@ -96,11 +96,11 @@ them costs an extra LLM call for zero retrieval gain.
 
 (on Hybrid + Rerank)
 
-| Chunking  | Faithfulness | Answer Rel. | Context Prec. | Chunks |
-|-----------|:------------:|:-----------:|:-------------:|:------:|
-| Sentence  |    0.954     |    0.939    |     0.903     |  6455  |
-| Semantic  |    0.825     |    0.784    |     0.806     |  8896  |
-| **Δ** |  **−0.129** | **−0.155** |   **−0.097** |  +38%  |
+| Chunking | Faithfulness | Answer Rel. | Context Prec. | Chunks |
+|----------|:------------:|:-----------:|:-------------:|:------:|
+| Sentence |    0.954     |    0.939    |     0.903     |  6455  |
+| Semantic |    0.825     |    0.784    |     0.806     |  8896  |
+| **Δ**    |  **−0.129**  | **−0.155**  |  **−0.097**   |  +38%  |
 
 ### Context Precision by Domain
 | Domain    | Sentence | Semantic |    Δ     |
@@ -165,7 +165,7 @@ Contextual Retrieval prepends an LLM-generated summary to each chunk to prevent 
 |----------------------|:------------:|:-----------:|:-------------:|:------:|
 | Normal (Hybrid)      |    0.946     |    0.951    |     0.880     |  6455  |
 | Contextual (Hybrid)  |    0.798     |    0.892    |     0.653     |  6455  |
-| **Δ**                |  **−0.148**  | **−0.059**  |  **−0.227**   | **0**  |
+| **Δ** |  **−0.148** | **−0.059** |  **−0.227** | **0** |
 
 **Finding:** Contextual Retrieval **severely degraded performance across all metrics**, with a catastrophic drop in Context Precision (−0.227) and Faithfulness (−0.148). This negative result reveals a critical structural limitation called the **"Thematic Swamping Effect"**, which occurs when applying this technique to continuous, homogeneous corpora like books:
 
@@ -180,25 +180,19 @@ Contextual Retrieval prepends an LLM-generated summary to each chunk to prevent 
 1. **No technique is universally better.** Hybrid search, HyDE, and
    semantic chunking each helped some domains and hurt others. Value
    depends on corpus, query type, and content structure.
-
 2. **Techniques can be redundant.** HyDE and reranking both refine
    retrieval — combining them adds latency for no gain (1+1≠2).
-
 3. **Per-domain analysis is essential.** Aggregate metrics repeatedly
    hid critical behaviour (e.g. hybrid's −0.21 on Nutrition, semantic's
    −0.50 on ML) that only appeared when broken down by topic.
-
 4. **Content type drives chunking strategy.** Prose favours semantic
    chunking; equations/code favour fixed-size.
-
 5. **Honest negative results matter.** Two of three "advanced"
    techniques were net-negative on this corpus — measured, not assumed.
-   
 6. **Self-correction needs a reliable grader.** CRAG's relevance grader
    can become a failure point — a strict version rejected valid content.
    Its real value is rejecting out-of-scope queries, not refining clean
    retrieval.
-
 7. **Corpus Topology dictates Contextual Retrieval success.** Anthropic’s baseline benchmarks showed +35% improvement because they used large sets of *independent, fragmented documents* (e.g., separate legal contracts, distinct support tickets). In an *already homogeneous corpus* (continuous textbook prose), adding global headers backfires completely, acting as semantic noise and blinding the hybrid retriever.
 
 ---
@@ -216,5 +210,12 @@ LLM_PROVIDER=openai python ab_test_hyde.py
 CHUNKING=sentence LLM_PROVIDER=openai python ab_test_chunking.py
 CHUNKING=semantic LLM_PROVIDER=openai python ab_test_chunking.py
 
+# Corrective RAG evaluation & out-of-scope tests
+LLM_PROVIDER=openai python ab_test_crag.py
+
 # Contextual Retrieval A/B test (requires cached json or clean run)
 LLM_PROVIDER=openai python ab_test_contextual.py
+```
+
+> Each configuration uses a separate Chroma collection
+> (`collection_<embed_model>_<chunking>`), so results never mix.

@@ -16,3 +16,6 @@ llama-index-embeddings-ollama
 torchvision
 EbookLib
 html2text
+arize-phoenix
+openinference-instrumentation-llama-index
+llama-index-callbacks-arize-phoenix

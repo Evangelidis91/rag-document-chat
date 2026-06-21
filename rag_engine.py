@@ -4,6 +4,8 @@ import re
 import chromadb
 from dotenv import load_dotenv
 
+load_dotenv()
+
 from llama_index.core import StorageContext, VectorStoreIndex, Settings
 from llama_index.core.chat_engine import CondensePlusContextChatEngine
 from llama_index.core.node_parser import SentenceSplitter
@@ -27,9 +29,22 @@ from llama_index.embeddings.ollama import OllamaEmbedding
 from llama_index.llms.ollama import Ollama
 
 from llama_index.core.node_parser import SemanticSplitterNodeParser
+import llama_index.core  # <-- Χρειάζεται για το global handler
 
-load_dotenv()
+# ---- OBSERVABILITY (Phoenix Tracing) ----
+if os.getenv("ENABLE_PHOENIX", "false").lower() == "true":
+    import phoenix as px
 
+    # Launch
+    px.launch_app()
+
+    # Native LlamaIndex handler: Κάνει αυτόματα instrument LLMs, Retrievers, Rerankers
+    llama_index.core.set_global_handler("arize_phoenix")
+    print("🔭 Phoenix tracing enabled → http://localhost:6006")
+
+# ======================================================================
+#  PROVIDER SWITCH
+# ======================================================================
 PROVIDER = os.getenv("LLM_PROVIDER", "ollama").lower()
 OLLAMA_LLM = os.getenv("OLLAMA_MODEL", "llama3.2")
 OLLAMA_EMBED = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
@@ -484,13 +499,14 @@ def load_index():
     return VectorStoreIndex.from_vector_store(vector_store)
 
 
-def get_chat_engine(index, file_names=None):
+def get_chat_engine(index, file_names=None, memory=None):
     filters = _build_filter(file_names=file_names)
     chat_engine = index.as_chat_engine(
         chat_mode="condense_plus_context",
         similarity_top_k=5,
         filters=filters,
         system_prompt=SYSTEM_PROMPT,
+        memory=memory,
         verbose=False,
     )
     return chat_engine
@@ -511,7 +527,7 @@ def _load_nodes_from_chroma(file_names=None):
     return nodes
 
 
-def get_hybrid_chat_engine(index, file_names=None, top_k_retrieve: int = 10, top_n_rerank: int = 3):
+def get_hybrid_chat_engine(index, file_names=None, top_k_retrieve: int = 10, top_n_rerank: int = 3, memory = None):
     scope = file_names if file_names else "ALL documents"
     print(f"\n🚀 [Engine] Building HYBRID chat engine (scope: {scope})")
 
@@ -529,7 +545,11 @@ def get_hybrid_chat_engine(index, file_names=None, top_k_retrieve: int = 10, top
     reranker = SentenceTransformerRerank(model="cross-encoder/ms-marco-MiniLM-L-6-v2", top_n=top_n_rerank)
 
     return CondensePlusContextChatEngine.from_defaults(
-        retriever=hybrid_retriever, node_postprocessors=[reranker], system_prompt=SYSTEM_PROMPT, verbose=False
+        retriever=hybrid_retriever,
+        node_postprocessors=[reranker],
+        system_prompt=SYSTEM_PROMPT,
+        memory=memory,
+        verbose=False
     )
 
 

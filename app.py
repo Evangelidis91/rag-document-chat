@@ -12,6 +12,7 @@ from rag_engine import (
     process_files,
     route_question_to_files,
 )
+from llama_index.core.memory import ChatMemoryBuffer
 
 # Common words to ignore when highlighting
 _STOPWORDS = {
@@ -89,12 +90,13 @@ def get_engine_for_files(target_files):
     """Return a chat engine (basic or hybrid) restricted to the given files.
 
     Cached; rebuilds only when the filter OR the mode changes.
-
-    :param target_files: List of file names (or None for 'all').
-    :return: A chat engine, or None if no index.
     """
     if "index" not in st.session_state:
         return None
+
+    # 🚨 FIX 1: Αρχικοποίηση ΕΝΟΣ κοινού memory object στο session state (αν δεν υπάρχει ήδη)
+    if "chat_memory" not in st.session_state:
+        st.session_state.chat_memory = ChatMemoryBuffer.from_defaults(token_limit=3000)
 
     use_hybrid = st.session_state.get("use_hybrid", True)
     signature = (
@@ -106,19 +108,19 @@ def get_engine_for_files(target_files):
         st.session_state.get("engine_sig") != signature
         or "chat_engine" not in st.session_state
     ):
+        memory = st.session_state.chat_memory
         if use_hybrid:
             engine = get_hybrid_chat_engine(
-                st.session_state.index, file_names=target_files
+                st.session_state.index, file_names=target_files, memory=memory
             )
         else:
             engine = get_chat_engine(
-                st.session_state.index, file_names=target_files
+                st.session_state.index, file_names=target_files, memory=memory
             )
         st.session_state.chat_engine = engine
         st.session_state.engine_sig = signature
 
     return st.session_state.chat_engine
-
 
 @st.dialog("Filename conflict")
 def conflict_dialog(conflicts):
@@ -281,6 +283,7 @@ with st.sidebar:
     if st.button("🗑️ Clear chat"):
         st.session_state.messages = []
         st.session_state.latencies = []
+        st.session_state.pop("chat_memory", None)
         if "chat_engine" in st.session_state:
             st.session_state.chat_engine.reset()
 
@@ -341,6 +344,10 @@ if prompt := st.chat_input("Ask something about your documents..."):
             target_files = st.session_state.get("manual_files")
 
         engine = get_engine_for_files(target_files)
+
+        if engine is None:
+            st.error("❌ Couldn't load documents for the selected routing. Try rephrasing or disabling auto-routing.")
+            st.stop()
 
         # Show + store the user's message
         st.session_state.messages.append({"role": "user", "content": prompt})
